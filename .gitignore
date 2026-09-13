@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+
+# Lambda deployment zips (generated, not source)
+lambda/*.zip
+
+# Glue temp files
+glue-temp/
+
+# Local data files (large CSVs - upload to S3 instead)
+data/
+*.csv
+*.parquet
+
+# AWS credentials (NEVER commit these)
+.aws/
+credentials
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+
+# Terraform/CDK state (if used)
+*.tfstate
+*.tfstate.backup
+.terraform/
+cdk.out/

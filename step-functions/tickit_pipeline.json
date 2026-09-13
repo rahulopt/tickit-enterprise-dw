@@ -1,0 +1,301 @@
+{
+  "Comment": "TICKIT Enterprise Data Warehouse - Nightly ETL Pipeline. Triggered by .done file upload in S3. Pipeline: Bronze CSV → Silver Parquet → Redshift Stage → Dim (SCD2) → Fact",
+  "StartAt": "ParallelBronzeToSilver",
+  "States": {
+
+    "ParallelBronzeToSilver": {
+      "Type": "Parallel",
+      "Comment": "Run all 6 ETL jobs simultaneously. Lambda for small tables, Glue for large ones. ~3 min vs 15 min sequential.",
+      "Branches": [
+        {
+          "StartAt": "CategoryETL",
+          "States": {
+            "CategoryETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:ap-south-1:519749210589:function:tickit-category-etl",
+                "InvocationType": "RequestResponse"
+              },
+              "ResultPath": "$.category_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "VenueETL",
+          "States": {
+            "VenueETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:ap-south-1:519749210589:function:tickit-venue-etl",
+                "InvocationType": "RequestResponse"
+              },
+              "ResultPath": "$.venue_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "UsersETL",
+          "States": {
+            "UsersETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "tickit-users-etl"
+              },
+              "ResultPath": "$.users_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.AmazonGlueException"],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "EventsETL",
+          "States": {
+            "EventsETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "tickit-events-etl"
+              },
+              "ResultPath": "$.events_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.AmazonGlueException"],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "ListingsETL",
+          "States": {
+            "ListingsETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "tickit-listings-etl"
+              },
+              "ResultPath": "$.listings_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.AmazonGlueException"],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "SalesETL",
+          "States": {
+            "SalesETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "tickit-sales-etl"
+              },
+              "ResultPath": "$.sales_result",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.AmazonGlueException"],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.etl_results",
+      "Next": "LoadStaging"
+    },
+
+    "LoadStaging": {
+      "Type": "Task",
+      "Comment": "COPY Silver Parquet into all 6 Redshift stage tables. TRUNCATE first (tonight's batch pattern).",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
+      "Parameters": {
+        "Database": "tickit",
+        "WorkgroupName": "ent-dw-1",
+        "Sql": "CALL sp_load_staging('ent-dw-ticket-sales-519749210589', 'arn:aws:iam::519749210589:role/RedshiftServerlessRole')"
+      },
+      "ResultPath": "$.staging_exec",
+      "Next": "WaitForStaging"
+    },
+
+    "WaitForStaging": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Comment": "Wait for COPY to complete (large tables take 2-3 min)",
+      "Next": "CheckStagingStatus"
+    },
+
+    "CheckStagingStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:describeStatement",
+      "Parameters": {
+        "Id.$": "$.staging_exec.Id"
+      },
+      "ResultPath": "$.staging_status",
+      "Next": "IsStagingDone"
+    },
+
+    "IsStagingDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.staging_status.Status",
+          "StringEquals": "FINISHED",
+          "Next": "LoadDimensions"
+        },
+        {
+          "Variable": "$.staging_status.Status",
+          "StringEquals": "FAILED",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Default": "WaitForStaging"
+    },
+
+    "LoadDimensions": {
+      "Type": "Task",
+      "Comment": "SCD Type 2 upsert for dim.users and dim.event. Must run AFTER staging, BEFORE facts.",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
+      "Parameters": {
+        "Database": "tickit",
+        "WorkgroupName": "ent-dw-1",
+        "Sql.$": "States.Format('CALL sp_load_dimensions(CURRENT_DATE)')"
+      },
+      "ResultPath": "$.dim_exec",
+      "Next": "WaitForDimensions"
+    },
+
+    "WaitForDimensions": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Comment": "SCD Type 2 on 2M users + 3M events takes ~30-60s",
+      "Next": "CheckDimensionsStatus"
+    },
+
+    "CheckDimensionsStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:describeStatement",
+      "Parameters": {
+        "Id.$": "$.dim_exec.Id"
+      },
+      "ResultPath": "$.dim_status",
+      "Next": "IsDimensionsDone"
+    },
+
+    "IsDimensionsDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.dim_status.Status",
+          "StringEquals": "FINISHED",
+          "Next": "LoadFacts"
+        },
+        {
+          "Variable": "$.dim_status.Status",
+          "StringEquals": "FAILED",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Default": "WaitForDimensions"
+    },
+
+    "LoadFacts": {
+      "Type": "Task",
+      "Comment": "Append new records to fact.sales and fact.listing with surrogate key lookup. Idempotent via NOT EXISTS.",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
+      "Parameters": {
+        "Database": "tickit",
+        "WorkgroupName": "ent-dw-1",
+        "Sql.$": "States.Format('CALL sp_load_facts(CURRENT_DATE)')"
+      },
+      "ResultPath": "$.fact_exec",
+      "Next": "WaitForFacts"
+    },
+
+    "WaitForFacts": {
+      "Type": "Wait",
+      "Seconds": 180,
+      "Comment": "22.5M + 25M rows with surrogate key lookups takes 2-3 min",
+      "Next": "CheckFactsStatus"
+    },
+
+    "CheckFactsStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:describeStatement",
+      "Parameters": {
+        "Id.$": "$.fact_exec.Id"
+      },
+      "ResultPath": "$.fact_status",
+      "Next": "IsFactsDone"
+    },
+
+    "IsFactsDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.fact_status.Status",
+          "StringEquals": "FINISHED",
+          "Next": "PipelineSuccess"
+        },
+        {
+          "Variable": "$.fact_status.Status",
+          "StringEquals": "FAILED",
+          "Next": "PipelineFailed"
+        }
+      ],
+      "Default": "WaitForFacts"
+    },
+
+    "PipelineSuccess": {
+      "Type": "Succeed",
+      "Comment": "All layers loaded successfully. Bronze → Silver → Stage → Dim → Fact complete."
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineError",
+      "Cause": "One or more stages failed. Check CloudWatch logs for details."
+    }
+  }
+}
