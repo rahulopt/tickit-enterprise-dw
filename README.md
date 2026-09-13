@@ -34,6 +34,12 @@ S3 .done file upload
     ✅ Pipeline Complete
 ```
 
+### Step Functions Orchestration (Live Execution)
+
+The complete pipeline is orchestrated by AWS Step Functions. All 6 ETL jobs run in parallel, followed by sequential Redshift loading stages (staging → dimensions → facts) with polling-based status checks:
+
+![Step Functions Pipeline](docs/images/step-functions-pipeline.png)
+
 ## 📊 Dataset
 
 | Table | Records | File Size | Processing |
