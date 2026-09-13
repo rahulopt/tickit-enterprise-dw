@@ -136,8 +136,7 @@ tickit-dw/
 │   └── tickit_pipeline.json      # State machine definition
 │
 └── docs/
-    ├── architecture.md           # Detailed architecture decisions
-    └── interview_answers.md      # Interview Q&A for this project
+    └── architecture.md           # Detailed architecture decisions
 ```
 
 ## 🚀 Setup & Deployment
@@ -265,4 +264,4 @@ echo "delivery complete" | aws s3 cp - s3://ent-dw-ticket-sales-ACCOUNT_ID/bronz
 
 ## 👤 Author
 
-Rahul Singh Rana — Data Engineering Hub
+Rahul Singh Rana
