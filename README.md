@@ -93,7 +93,7 @@ dim.users (buyer)  ────┼──── fact.sales ──── dim.event
 | Lambda for <1K rows (vs Glue) | ~99% cheaper |
 | Python Shell for 1K-10M rows (vs Spark) | ~60% cheaper |
 | Spark only for >10M rows | Right-sized compute |
-| Parallel execution (6 jobs) | 15 min → 3 min pipeline time |
+| Parallel execution (6 jobs) | Sequential ~7 min → parallel ~2 min (ETL stage) |
 | Parquet compression | 80% storage reduction vs CSV |
 
 **Overall: 60-90% cost reduction vs all-Spark approach**
@@ -245,10 +245,12 @@ echo "delivery complete" | aws s3 cp - s3://ent-dw-ticket-sales-ACCOUNT_ID/bronz
 
 ## 📈 Performance Results
 
-| Stage | Data | Time |
-|-------|------|------|
-| Lambda: category | 11 rows | 2.9s |
-| Lambda: venue | 202 rows | 3.0s |
+**Note:** The 6 ETL jobs run **in parallel**, so wall-clock time for the ETL stage equals the *slowest* job (~2 min), not the sum. Redshift stages run sequentially after ETL. The pipeline also includes fixed `Wait` states between Redshift polling checks.
+
+| Stage | Data | Time (individual) |
+|-------|------|-------------------|
+| Lambda: category | 11 rows | 3s |
+| Lambda: venue | 202 rows | 3s |
 | Glue Shell: users | 2M rows | 78s |
 | Glue Shell: events | 3M rows | 57s |
 | Glue Spark: listings | 25M rows | 119s |
@@ -256,7 +258,13 @@ echo "delivery complete" | aws s3 cp - s3://ent-dw-ticket-sales-ACCOUNT_ID/bronz
 | Redshift COPY (all 6) | 52.5M rows | 31s |
 | SCD Type 2 (dim load) | 5M rows | 21s |
 | Fact load | 47.5M rows | 31s |
-| **Total Pipeline** | **52.5M rows** | **~15 min** |
+
+**End-to-end pipeline (verified run):** ~9 minutes wall-clock
+- ETL stage (6 jobs parallel): ~2 min (bounded by slowest Spark job)
+- Redshift staging + dimensions + facts: ~1.5 min compute
+- Fixed `Wait` states for async polling: ~6 min (tunable)
+
+Compared to a naive sequential all-Spark approach (~15+ min), parallel execution and right-sized compute cut both time and cost.
 
 ## 🛠️ Tech Stack
 
