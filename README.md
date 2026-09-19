@@ -31,14 +31,16 @@ S3 .done file upload
         ↓
   sp_load_facts (Surrogate Key Lookup)
         ↓
+  SNS Publish (SMS/Email notification)
+        ↓
     ✅ Pipeline Complete
 ```
 
 ### Step Functions Orchestration (Live Execution)
 
-The complete pipeline is orchestrated by AWS Step Functions. All 6 ETL jobs run in parallel, followed by sequential Redshift loading stages (staging → dimensions → facts) with polling-based status checks:
+The complete pipeline is orchestrated by AWS Step Functions. All 6 ETL jobs run in parallel, followed by sequential Redshift loading stages (staging → dimensions → facts) with polling-based status checks. The pipeline ends with an SNS publish: a success notification on completion (`NotifySuccess`), or a stage-specific failure notification (`NotifyETLFailed`, `NotifyStagingFailed`, `NotifyDimensionsFailed`, `NotifyFactsFailed`) caught via `Catch` blocks on every step:
 
-![Step Functions Pipeline](docs/images/step-functions-pipeline.png)
+![Step Functions Pipeline](docs/images/stepfunctions_graph.png)
 
 ## 📊 Dataset
 
@@ -125,7 +127,8 @@ tickit-dw/
 │   ├── 03_dim_tables.sql         # dim.date, dim.users, dim.event (SCD2)
 │   ├── 04_fact_tables.sql        # fact.sales, fact.listing
 │   ├── 05_load_dim_date.sql      # Calendar table population
-│   └── 06_stored_procedures.sql  # sp_load_staging, sp_load_dimensions, sp_load_facts
+│   ├── 06_stored_procedures.sql  # sp_load_staging, sp_load_dimensions, sp_load_facts
+│   └── 07_analytical_views.sql   # 5 business views (venue, seller, events, monthly, category)
 │
 ├── lambda/                       # Lambda ETL functions
 │   ├── category_etl.py           # Bronze CSV → Silver Parquet (11 rows)
@@ -139,7 +142,7 @@ tickit-dw/
 │   └── sales_etl.py              # Spark - 22.5M rows (10 × G.2X workers)
 │
 ├── step-functions/
-│   └── tickit_pipeline.json      # State machine definition
+│   └── tickit_pipeline.json      # State machine (6 parallel ETL → stage → dim → fact → SNS notify)
 │
 └── docs/
     └── architecture.md           # Detailed architecture decisions
@@ -273,6 +276,7 @@ Compared to a naive sequential all-Spark approach (~15+ min), parallel execution
 - **Warehouse:** Amazon Redshift Serverless
 - **Orchestration:** AWS Step Functions
 - **Trigger:** S3 Event Notifications → Lambda
+- **Notifications:** Amazon SNS (SMS/Email) — success + stage-specific failure alerts
 - **Languages:** Python 3.12, PySpark, SQL (Redshift)
 - **Libraries:** Pandas, PyArrow, boto3
 
