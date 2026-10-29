@@ -28,7 +28,7 @@ import boto3
 import pandas as pd
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Glue Python Shell uses print for logging (no CloudWatch handler by default)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -61,7 +61,7 @@ def main():
     logger.info("=" * 60)
     logger.info("Starting users ETL: Bronze CSV → Silver Parquet")
     logger.info(f"Source: s3://{S3_BUCKET}/{BRONZE_KEY}")
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
 
     # ── Step 1: Read from Bronze ────────────────────────────────
     logger.info("Reading bronze CSV into memory...")
@@ -75,19 +75,23 @@ def main():
         low_memory=False,
     )
     # Drop extra columns not in our schema (e.g., created_date from source)
-    df = df[[c for c in COLUMNS if c in df.columns]]
+    missing = set(COLUMNS) - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required users CSV columns: {sorted(missing)}")
+    df = df[COLUMNS].copy()
     logger.info(f"Bronze read: {len(df):,} rows x {len(df.columns)} columns")
 
     # ── Step 2: Transform ────────────────────────────────────────
     # 2a. Drop rows where primary key is null
     before = len(df)
-    df = df[df["userid"].notna() & (df["userid"].str.strip() != "")]
+    df["userid"] = pd.to_numeric(df["userid"].str.strip(), errors="coerce")
+    df = df.dropna(subset=["userid"]).copy()
     dropped = before - len(df)
     if dropped > 0:
         logger.warning(f"Dropped {dropped:,} rows with null userid")
 
     # 2b. Cast primary key
-    df["userid"] = df["userid"].str.strip().astype("int32")
+    df["userid"] = df["userid"].astype("int32")
 
     # 2c. String cleaning for name/contact fields
     for col in ["username", "firstname", "lastname", "city", "phone"]:
@@ -117,9 +121,6 @@ def main():
     logger.info(f"After transforms: {len(df):,} clean rows")
 
     # ── Step 3: Clear existing Silver files ──────────────────────
-    logger.info(f"Clearing existing silver files at {SILVER_PREFIX}")
-    _clear_silver_prefix(SILVER_PREFIX)
-
     # ── Step 4: Write to Silver as Parquet ───────────────────────
     # Single parquet file (2M rows × 18 cols is ~60MB compressed)
     logger.info("Writing Parquet to silver...")
@@ -139,26 +140,31 @@ def main():
         Body=parquet_buffer.getvalue(),
     )
 
-    duration = (datetime.utcnow() - start_time).total_seconds()
+    _clear_silver_prefix(SILVER_PREFIX, keep_key=silver_key)
+
+    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
     file_size_mb = len(parquet_buffer.getvalue()) / 1024 / 1024
     logger.info(f"Written: s3://{S3_BUCKET}/{silver_key} ({file_size_mb:.1f} MB)")
     logger.info(f"Users ETL DONE in {duration:.1f}s | {len(df):,} rows")
     logger.info("=" * 60)
 
 
-def _clear_silver_prefix(prefix: str) -> None:
-    """Delete existing silver files (tonight's overwrite pattern)."""
+def _clear_silver_prefix(prefix: str, keep_key: str) -> None:
+    """Remove stale files after the new Parquet file is successfully written."""
     paginator = s3_client.get_paginator("list_objects_v2")
     objects_to_delete = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
         for obj in page.get("Contents", []):
-            objects_to_delete.append({"Key": obj["Key"]})
+            if obj["Key"] != keep_key:
+                objects_to_delete.append({"Key": obj["Key"]})
 
     if objects_to_delete:
         # S3 delete_objects max 1000 per call
         for i in range(0, len(objects_to_delete), 1000):
             batch = objects_to_delete[i : i + 1000]
-            s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+            response = s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+            if response.get("Errors"):
+                raise RuntimeError(f"Failed removing stale Silver objects: {response['Errors']}")
         logger.info(f"Cleared {len(objects_to_delete)} files from {prefix}")
 
 

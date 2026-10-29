@@ -1,124 +1,105 @@
-"""
-TICKIT Enterprise Data Warehouse
-Lambda: s3_trigger.py
+"""Start the nightly Standard Step Functions pipeline for bronze/.done uploads.
 
-Purpose: S3 trigger handler for .done file
-         When source system drops bronze/.done file,
-         this Lambda starts the Step Functions pipeline.
+Configure the S3 notification for s3:ObjectCreated:* with prefix ``bronze/``
+and suffix ``.done``. This handler independently checks the *exact* key.
 
-Flow:
-    Source System drops files:
-    1. bronze/category.csv
-    2. bronze/venue.csv
-    3. bronze/users.csv
-    4. bronze/event.csv
-    5. bronze/listing.csv
-    6. bronze/sales.csv
-    7. bronze/.done  ← THIS triggers the Lambda
-
-How it's connected:
-    S3 Event Notification (direct) → This Lambda → Step Functions
-
-    NOTE: This Lambda uses the direct S3 Event Notification format
-    (event["Records"][0]["s3"]), NOT the EventBridge event format.
-    EventBridge S3 events use a different structure:
-      event["detail"]["bucket"]["name"] / event["detail"]["object"]["key"]
-    Do not switch to EventBridge routing without updating the parser below.
-
-Safeguard:
-    - Only starts pipeline if key ends with '.done'
-    - Validates expected key prefix is 'bronze/'
-    - Checks Step Functions not already running (prevents duplicate runs)
+The execution name is deliberately stable for a UTC delivery date. This
+prevents concurrent duplicate starts and repeated deliveries of the same S3
+notification. A Standard workflow cannot reuse that name for 90 days; see
+README for intentional reprocessing instructions.
 """
 
 import json
-import boto3
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timezone
+from urllib.parse import unquote_plus
 
-logger = logging.getLogger()
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-STATE_MACHINE_ARN = "arn:aws:states:ap-south-1:519749210589:stateMachine:tickit-nightly-pipeline"
-EXPECTED_BUCKET = "ent-dw-ticket-sales-519749210589"
+STATE_MACHINE_ARN = os.getenv(
+    "STATE_MACHINE_ARN",
+    "arn:aws:states:ap-south-1:519749210589:stateMachine:tickit-nightly-pipeline",
+)
+EXPECTED_BUCKET = os.getenv("TICKIT_BUCKET", "ent-dw-ticket-sales-519749210589")
 DONE_FILE_KEY = "bronze/.done"
 
-sfn_client = boto3.client("stepfunctions", region_name="ap-south-1")
+sfn_client = boto3.client("stepfunctions")
+
+
+def _handle_record(record):
+    s3_info = record.get("s3", {})
+    bucket = s3_info.get("bucket", {}).get("name")
+    # S3 event notification object keys are form-url-encoded (spaces become '+').
+    encoded_key = s3_info.get("object", {}).get("key", "")
+    key = unquote_plus(encoded_key)
+
+    if bucket != EXPECTED_BUCKET or key != DONE_FILE_KEY:
+        logger.info("Ignoring S3 object: bucket=%s key=%s", bucket, key)
+        return {"status": "IGNORED", "bucket": bucket, "key": key}
+
+    event_time = record.get("eventTime")
+    if not event_time:
+        raise ValueError("S3 event is missing eventTime; cannot determine delivery date")
+    # eventTime is stable across at-least-once delivery of the same event.
+    delivery_time = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+    load_date = delivery_time.astimezone(timezone.utc).date().isoformat()
+    execution_name = f"tickit-nightly-{load_date}"
+
+    # Avoid overlapping *different-day* batches which overwrite shared Silver
+    # paths. This is a best-effort pre-check, not an atomic global lock.
+    running = sfn_client.list_executions(
+        stateMachineArn=STATE_MACHINE_ARN, statusFilter="RUNNING", maxResults=10
+    ).get("executions", [])
+    if running:
+        logger.info("Pipeline already running; skipping marker for %s", load_date)
+        return {"status": "SKIPPED", "reason": "Pipeline already running"}
+
+    execution_input = json.dumps(
+        {"trigger": {
+            "source": "s3_done_file",
+            "bucket": bucket,
+            "key": key,
+            "load_date": load_date,
+        }},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    try:
+        execution = sfn_client.start_execution(
+            stateMachineArn=STATE_MACHINE_ARN,
+            name=execution_name,
+            input=execution_input,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ExecutionAlreadyExists":
+            logger.info("Daily execution already exists: %s", execution_name)
+            return {"status": "SKIPPED", "reason": "Daily execution already exists"}
+        raise
+
+    logger.info("Started %s: %s", execution_name, execution["executionArn"])
+    return {
+        "status": "STARTED",
+        "execution_arn": execution["executionArn"],
+        "load_date": load_date,
+    }
 
 
 def lambda_handler(event, context):
-    logger.info(f"Received event: {json.dumps(event)}")
+    if event.get("Event") == "s3:TestEvent":
+        return {"statusCode": 200, "body": json.dumps({"status": "IGNORED"})}
 
-    # ── Step 1: Extract S3 event info ────────────────────────────
-    try:
-        # S3 event notification structure
-        record = event["Records"][0]
-        bucket = record["s3"]["bucket"]["name"]
-        key = record["s3"]["object"]["key"]
-    except (KeyError, IndexError) as e:
-        logger.error(f"Invalid event structure: {e}")
-        return {"statusCode": 400, "body": "Invalid S3 event"}
+    records = event.get("Records")
+    if not isinstance(records, list) or not records:
+        logger.error("Expected an S3 notification with nonempty Records list")
+        return {"statusCode": 400, "body": "Invalid S3 notification"}
 
-    logger.info(f"S3 event: bucket={bucket}, key={key}")
-
-    # ── Step 2: Validate this is the .done trigger ────────────────
-    if bucket != EXPECTED_BUCKET:
-        logger.warning(f"Wrong bucket: {bucket}, expected {EXPECTED_BUCKET}")
-        return {"statusCode": 200, "body": "Not our bucket, ignoring"}
-
-    if not key.endswith(".done"):
-        logger.info(f"Key {key} is not .done file, ignoring")
-        return {"statusCode": 200, "body": "Not a .done file, ignoring"}
-
-    if not key.startswith("bronze/"):
-        logger.warning(f"Key {key} not in bronze/, ignoring")
-        return {"statusCode": 200, "body": "Not in bronze/, ignoring"}
-
-    logger.info(f".done file detected: {key} — Starting TICKIT nightly pipeline!")
-
-    # ── Step 3: Check if pipeline already running ─────────────────
-    # Prevent duplicate runs if .done file arrives multiple times
-    running_executions = sfn_client.list_executions(
-        stateMachineArn=STATE_MACHINE_ARN,
-        statusFilter="RUNNING",
-    )
-    if running_executions["executions"]:
-        logger.warning("Pipeline already running — skipping duplicate trigger")
-        return {
-            "statusCode": 200,
-            "body": json.dumps({
-                "status": "SKIPPED",
-                "reason": "Pipeline already running",
-                "running_execution": running_executions["executions"][0]["executionArn"],
-            }),
-        }
-
-    # ── Step 4: Start Step Functions execution ─────────────────────
-    now = datetime.utcnow()
-    load_date = now.strftime("%Y-%m-%d")
-    unique_suffix = now.strftime("%H%M%S")
-    execution_name = f"tickit-nightly-{load_date}-{unique_suffix}"
-
-    response = sfn_client.start_execution(
-        stateMachineArn=STATE_MACHINE_ARN,
-        name=execution_name,
-        input=json.dumps({
-            "trigger": {
-                "source": "s3_done_file",
-                "bucket": bucket,
-                "key": key,
-                "load_date": load_date,
-            }
-        }),
-    )
-
-    logger.info(f"Pipeline started: {response['executionArn']}")
-
-    return {
-        "statusCode": 200,
-        "body": json.dumps({
-            "status": "STARTED",
-            "execution_arn": response["executionArn"],
-            "load_date": load_date,
-        }),
-    }
+    outcomes = []
+    for record in records:
+        outcomes.append(_handle_record(record))
+    return {"statusCode": 200, "body": json.dumps({"results": outcomes})}

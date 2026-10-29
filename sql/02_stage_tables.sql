@@ -1,13 +1,13 @@
 -- ============================================================
 -- TICKIT Enterprise Data Warehouse
 -- Script: 02_stage_tables.sql
--- Purpose: Staging tables - temporary landing for nightly COPY
+-- Purpose: Staging tables - landing for nightly COPY
 --
 -- PHYSICAL DESIGN DECISIONS (Data Engineer choices):
---   - DISTSTYLE EVEN: Staging tables do full-table TRUNCATE+COPY
+--   - DISTSTYLE EVEN: Staging tables do full-table DELETE+COPY
 --     every night. We don't join staging to anything, so no
 --     co-location benefit. EVEN gives best parallel COPY throughput.
---   - No SORTKEY on staging: Data gets truncated every night.
+--   - No SORTKEY on staging: Data is replaced each night.
 --     Sorting would waste time for a table that only lives hours.
 --   - No compression on staging: Redshift AUTO compression works
 --     best with data that persists. Staging is transient.

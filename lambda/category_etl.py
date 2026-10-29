@@ -21,7 +21,7 @@ import boto3
 import pandas as pd
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -35,7 +35,7 @@ s3_client = boto3.client("s3")
 
 def lambda_handler(event, context):
     logger.info("Starting category ETL: Bronze CSV → Silver Parquet")
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
 
     try:
         # ── Step 1: Read from Bronze ────────────────────────────
@@ -53,13 +53,15 @@ def lambda_handler(event, context):
         # ── Step 2: Transform ───────────────────────────────────
         # 2a. Drop rows where primary key is null
         before = len(df)
-        df = df[df["catid"].notna() & (df["catid"].str.strip() != "")]
+        df = df.copy()
+        df["catid"] = pd.to_numeric(df["catid"].str.strip(), errors="coerce")
+        df = df.dropna(subset=["catid"]).copy()
         after = len(df)
         if before != after:
             logger.warning(f"Dropped {before - after} rows with null catid")
 
         # 2b. Cast types
-        df["catid"] = df["catid"].str.strip().astype("int16")
+        df["catid"] = df["catid"].astype("int16")
         df["catgroup"] = df["catgroup"].str.strip().str.upper()
         df["catname"] = df["catname"].str.strip()
         df["catdesc"] = df["catdesc"].str.strip()
@@ -71,8 +73,6 @@ def lambda_handler(event, context):
 
         # ── Step 3: Write to Silver as Parquet ──────────────────
         # Clear old silver data (tonight's overwrite pattern)
-        _clear_silver_prefix(SILVER_PREFIX)
-
         # Write parquet to in-memory buffer
         parquet_buffer = io.BytesIO()
         df.to_parquet(parquet_buffer, index=False, engine="pyarrow", compression="snappy")
@@ -85,7 +85,9 @@ def lambda_handler(event, context):
             Body=parquet_buffer.getvalue(),
         )
 
-        duration = (datetime.utcnow() - start_time).total_seconds()
+        _clear_silver_prefix(SILVER_PREFIX, keep_key=silver_key)
+
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(f"Silver write complete: s3://{S3_BUCKET}/{silver_key}")
         logger.info(f"Category ETL DONE in {duration:.2f}s | {len(df)} rows")
 
@@ -105,19 +107,22 @@ def lambda_handler(event, context):
         raise
 
 
-def _clear_silver_prefix(prefix: str) -> None:
-    """Delete existing silver files before overwrite (tonight's batch pattern)."""
+def _clear_silver_prefix(prefix: str, keep_key: str) -> None:
+    """Remove leftover old files only after the new Parquet upload succeeds."""
     paginator = s3_client.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix)
 
     objects_to_delete = []
     for page in pages:
         for obj in page.get("Contents", []):
-            objects_to_delete.append({"Key": obj["Key"]})
+            if obj["Key"] != keep_key:
+                objects_to_delete.append({"Key": obj["Key"]})
 
     if objects_to_delete:
-        s3_client.delete_objects(
-            Bucket=S3_BUCKET,
-            Delete={"Objects": objects_to_delete},
-        )
-        logger.info(f"Cleared {len(objects_to_delete)} existing files from {prefix}")
+        for i in range(0, len(objects_to_delete), 1000):
+            response = s3_client.delete_objects(
+                Bucket=S3_BUCKET, Delete={"Objects": objects_to_delete[i:i + 1000]}
+            )
+            if response.get("Errors"):
+                raise RuntimeError(f"Failed removing obsolete Silver objects: {response['Errors']}")
+        logger.info(f"Removed {len(objects_to_delete)} stale files from {prefix}")

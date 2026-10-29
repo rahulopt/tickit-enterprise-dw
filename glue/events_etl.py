@@ -32,7 +32,7 @@ import boto3
 import pandas as pd
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def _read_csv_from_s3(key: str, names=None, dtype=str) -> pd.DataFrame:
 def main():
     logger.info("=" * 60)
     logger.info("Starting event ETL: Bronze CSV → Silver Parquet (denormalized)")
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
 
     # ── Step 1: Read all 3 source tables from Bronze ─────────────
     df_event = _read_csv_from_s3(
@@ -75,12 +75,14 @@ def main():
     )
 
     # ── Step 2: Filter nulls on primary keys ─────────────────────
-    df_event = df_event[df_event["eventid"].notna() & (df_event["eventid"].str.strip() != "")]
-    df_venue = df_venue[df_venue["venueid"].notna() & (df_venue["venueid"].str.strip() != "")]
-    df_cat = df_cat[df_cat["catid"].notna() & (df_cat["catid"].str.strip() != "")]
+    df_event = df_event.copy()
+    df_event["eventid"] = pd.to_numeric(df_event["eventid"].str.strip(), errors="coerce")
+    df_event = df_event.dropna(subset=["eventid"]).copy()
+    df_venue = df_venue[df_venue["venueid"].notna() & (df_venue["venueid"].str.strip() != "")].copy()
+    df_cat = df_cat[df_cat["catid"].notna() & (df_cat["catid"].str.strip() != "")].copy()
 
     # ── Step 3: Cast key columns for join ────────────────────────
-    df_event["eventid"] = df_event["eventid"].str.strip().astype("int32")
+    df_event["eventid"] = df_event["eventid"].astype("int32")
     df_event["venueid"] = pd.to_numeric(df_event["venueid"].str.strip(), errors="coerce").astype("Int16")
     df_event["catid"] = pd.to_numeric(df_event["catid"].str.strip(), errors="coerce").astype("Int16")
     df_event["dateid"] = pd.to_numeric(df_event["dateid"].str.strip(), errors="coerce").astype("Int32")
@@ -106,6 +108,10 @@ def main():
     df_cat["catname"] = df_cat["catname"].str.strip()
     df_cat["catdesc"] = df_cat["catdesc"].str.strip()
 
+    # The right sides of these joins must be unique by natural key.
+    df_venue = df_venue.drop_duplicates(subset=["venueid"], keep="last")
+    df_cat = df_cat.drop_duplicates(subset=["catid"], keep="last")
+
     # ── Step 5: Denormalize — join venue + category into event ───
     logger.info("Denormalizing: joining venue and category into event...")
 
@@ -114,10 +120,12 @@ def main():
         df_venue[["venueid", "venuename", "venuecity", "venuestate", "venueseats"]],
         on="venueid",
         how="left",
+        validate="many_to_one",
     ).merge(
         df_cat[["catid", "catgroup", "catname", "catdesc"]],
         on="catid",
         how="left",
+        validate="many_to_one",
     )
 
     logger.info(f"After join: {len(df_merged):,} rows (should equal event count)")
@@ -140,8 +148,6 @@ def main():
     df_merged = df_merged[output_columns]
 
     # ── Step 8: Clear existing Silver + write Parquet ────────────
-    _clear_silver_prefix(SILVER_PREFIX)
-
     logger.info("Writing Parquet to silver...")
     parquet_buffer = io.BytesIO()
     df_merged.to_parquet(
@@ -159,25 +165,30 @@ def main():
         Body=parquet_buffer.getvalue(),
     )
 
-    duration = (datetime.utcnow() - start_time).total_seconds()
+    _clear_silver_prefix(SILVER_PREFIX, keep_key=silver_key)
+
+    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
     file_size_mb = len(parquet_buffer.getvalue()) / 1024 / 1024
     logger.info(f"Written: s3://{S3_BUCKET}/{silver_key} ({file_size_mb:.1f} MB)")
     logger.info(f"Event ETL DONE in {duration:.1f}s | {len(df_merged):,} rows")
     logger.info("=" * 60)
 
 
-def _clear_silver_prefix(prefix: str) -> None:
-    """Delete existing silver files."""
+def _clear_silver_prefix(prefix: str, keep_key: str) -> None:
+    """Remove stale files only after successful new Parquet upload."""
     paginator = s3_client.get_paginator("list_objects_v2")
     objects_to_delete = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
         for obj in page.get("Contents", []):
-            objects_to_delete.append({"Key": obj["Key"]})
+            if obj["Key"] != keep_key:
+                objects_to_delete.append({"Key": obj["Key"]})
 
     if objects_to_delete:
         for i in range(0, len(objects_to_delete), 1000):
             batch = objects_to_delete[i : i + 1000]
-            s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+            response = s3_client.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+            if response.get("Errors"):
+                raise RuntimeError(f"Failed removing stale Silver objects: {response['Errors']}")
         logger.info(f"Cleared {len(objects_to_delete)} files from {prefix}")
 
 

@@ -180,7 +180,8 @@ aws redshift-serverless create-workgroup --workgroup-name ent-dw-1 \
 ```bash
 # Run SQL scripts in order via Redshift Data API or Query Editor
 # 01_create_schemas.sql → 02_stage_tables.sql → 03_dim_tables.sql
-# → 04_fact_tables.sql → 06_stored_procedures.sql
+# → 04_fact_tables.sql → 05_load_dim_date.sql
+# → 06_stored_procedures.sql → 07_analytical_views.sql
 ```
 
 ### Step 3: Deploy ETL Jobs
@@ -190,9 +191,9 @@ aws s3 sync glue/ s3://ent-dw-ticket-sales-ACCOUNT_ID/glue-scripts/
 
 # Deploy Lambda functions
 cd lambda
-zip category_etl.zip category_etl.py
-zip venue_etl.zip venue_etl.py
-zip s3_trigger.zip s3_trigger.py
+zip -FS category_etl.zip category_etl.py
+zip -FS venue_etl.zip venue_etl.py
+zip -FS s3_trigger.zip s3_trigger.py
 
 aws lambda create-function --function-name tickit-category-etl \
     --runtime python3.12 --handler category_etl.lambda_handler \
@@ -283,3 +284,23 @@ Compared to a naive sequential all-Spark approach (~15+ min), parallel execution
 ## 👤 Author
 
 Rahul Singh Rana
+
+
+## Offline regression tests and release precautions
+
+From the repository root, install `pytest`, `pandas`, and `boto3` and run
+`python -m pytest -q`. These tests validate key Lambda/Glue transformations,
+S3-trigger idempotency behavior, the ASL workflow graph, and core SQL invariants.
+They **do not** execute Spark, Redshift, or Step Functions in AWS. Run a full
+end-to-end integration test before replacing deployed resources.
+
+The included `lambda/*.zip` packages are regenerated from their matching `.py`
+source files. Rebuild these ZIPs after any Lambda changes before publishing a
+new AWS Lambda function version. Configure the state machine, S3 bucket,
+Redshift workgroup, and IAM resources for your target AWS account.
+
+The date dimension currently assumes sequential source `dateid` values beginning
+on 2008-01-01; confirm the keys and the source calendar range against the actual
+Bronze files before running `05_load_dim_date.sql`. The S3 trigger uses one
+Standard execution name per UTC day, so intentional same-day reruns require
+a deliberate new execution name and controlled reprocessing.

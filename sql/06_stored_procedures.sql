@@ -4,7 +4,7 @@
 -- Purpose: 3 stored procedures for Gold layer loading
 --
 -- Procedure 1: sp_load_staging
---   TRUNCATE + COPY from Silver Parquet → stage.* tables
+--   DELETE + COPY from Silver Parquet → stage.* tables (single transaction)
 --   Called after all 6 ETL jobs complete
 --
 -- Procedure 2: sp_load_dimensions
@@ -22,9 +22,9 @@
 -- PROCEDURE 1: sp_load_staging
 -- ============================================================
 -- Purpose: Load Silver Parquet files into Redshift staging tables.
--- Pattern: TRUNCATE (tonight's batch only) → COPY from Silver S3
--- Why TRUNCATE not DROP: DDL is expensive. Truncate preserves
---   structure and vacuums automatically.
+-- Pattern: DELETE (current snapshot) → COPY from Silver S3
+-- DELETE avoids Redshift TRUNCATE's implicit commit. If a COPY fails,
+-- the entire staging transaction rolls back instead of leaving half a batch.
 -- IAM Role: RedshiftServerlessRole has S3 read access
 -- ============================================================
 
@@ -38,38 +38,38 @@ DECLARE
     v_copy_options  VARCHAR(200);
 BEGIN
     v_s3_base      := 's3://' || p_s3_bucket || '/silver/';
-    v_copy_options := 'FORMAT AS PARQUET IAM_ROLE ''' || p_iam_role_arn || '''';
+    v_copy_options := 'IAM_ROLE ' || QUOTE_LITERAL(p_iam_role_arn) || ' FORMAT AS PARQUET';
 
     RAISE INFO 'sp_load_staging: Starting at %', GETDATE();
 
     -- ── category ──────────────────────────────────────────────
-    TRUNCATE TABLE stage.category;
-    EXECUTE 'COPY stage.category FROM ''' || v_s3_base || 'category/ '' ' || v_copy_options;
+    DELETE FROM stage.category;
+    EXECUTE 'COPY stage.category FROM ' || QUOTE_LITERAL(v_s3_base || 'category/') || ' ' || v_copy_options;
     RAISE INFO 'stage.category loaded: % rows', (SELECT COUNT(*) FROM stage.category);
 
     -- ── venue ─────────────────────────────────────────────────
-    TRUNCATE TABLE stage.venue;
-    EXECUTE 'COPY stage.venue FROM ''' || v_s3_base || 'venue/ '' ' || v_copy_options;
+    DELETE FROM stage.venue;
+    EXECUTE 'COPY stage.venue FROM ' || QUOTE_LITERAL(v_s3_base || 'venue/') || ' ' || v_copy_options;
     RAISE INFO 'stage.venue loaded: % rows', (SELECT COUNT(*) FROM stage.venue);
 
     -- ── users ─────────────────────────────────────────────────
-    TRUNCATE TABLE stage.users;
-    EXECUTE 'COPY stage.users FROM ''' || v_s3_base || 'users/ '' ' || v_copy_options;
+    DELETE FROM stage.users;
+    EXECUTE 'COPY stage.users FROM ' || QUOTE_LITERAL(v_s3_base || 'users/') || ' ' || v_copy_options;
     RAISE INFO 'stage.users loaded: % rows', (SELECT COUNT(*) FROM stage.users);
 
     -- ── event (denormalized) ──────────────────────────────────
-    TRUNCATE TABLE stage.event;
-    EXECUTE 'COPY stage.event FROM ''' || v_s3_base || 'event/ '' ' || v_copy_options;
+    DELETE FROM stage.event;
+    EXECUTE 'COPY stage.event FROM ' || QUOTE_LITERAL(v_s3_base || 'event/') || ' ' || v_copy_options;
     RAISE INFO 'stage.event loaded: % rows', (SELECT COUNT(*) FROM stage.event);
 
     -- ── listing ───────────────────────────────────────────────
-    TRUNCATE TABLE stage.listing;
-    EXECUTE 'COPY stage.listing FROM ''' || v_s3_base || 'listing/ '' ' || v_copy_options;
+    DELETE FROM stage.listing;
+    EXECUTE 'COPY stage.listing FROM ' || QUOTE_LITERAL(v_s3_base || 'listing/') || ' ' || v_copy_options;
     RAISE INFO 'stage.listing loaded: % rows', (SELECT COUNT(*) FROM stage.listing);
 
     -- ── sales ─────────────────────────────────────────────────
-    TRUNCATE TABLE stage.sales;
-    EXECUTE 'COPY stage.sales FROM ''' || v_s3_base || 'sales/ '' ' || v_copy_options;
+    DELETE FROM stage.sales;
+    EXECUTE 'COPY stage.sales FROM ' || QUOTE_LITERAL(v_s3_base || 'sales/') || ' ' || v_copy_options;
     RAISE INFO 'stage.sales loaded: % rows', (SELECT COUNT(*) FROM stage.sales);
 
     RAISE INFO 'sp_load_staging: Completed at %', GETDATE();
@@ -123,29 +123,29 @@ BEGIN
     -- at least one attribute differs between stage and dim
     UPDATE dim.users
     SET
-        expiry_date = p_load_date - INTERVAL '1 day',
+        expiry_date = DATEADD(day, -1, p_load_date)::DATE,
         is_current  = FALSE
     FROM stage.users s
     WHERE dim.users.userid     = s.userid
       AND dim.users.is_current = TRUE
       AND (
-           COALESCE(dim.users.city,      '')  <> COALESCE(s.city,      '')
-        OR COALESCE(dim.users.state,     '')  <> COALESCE(s.state,     '')
-        OR COALESCE(dim.users.email,     '')  <> COALESCE(s.email,     '')
-        OR COALESCE(dim.users.phone,     '')  <> COALESCE(s.phone,     '')
-        OR COALESCE(dim.users.firstname, '')  <> COALESCE(s.firstname, '')
-        OR COALESCE(dim.users.lastname,  '')  <> COALESCE(s.lastname,  '')
-        -- preference changes also tracked (user opts into/out of categories)
-        OR COALESCE(dim.users.likesports::text,    'f') <> COALESCE(s.likesports::text,    'f')
-        OR COALESCE(dim.users.likeconcerts::text,  'f') <> COALESCE(s.likeconcerts::text,  'f')
-        OR COALESCE(dim.users.likerock::text,      'f') <> COALESCE(s.likerock::text,      'f')
-        OR COALESCE(dim.users.likejazz::text,      'f') <> COALESCE(s.likejazz::text,      'f')
-        OR COALESCE(dim.users.likeclassical::text, 'f') <> COALESCE(s.likeclassical::text, 'f')
-        OR COALESCE(dim.users.likeopera::text,     'f') <> COALESCE(s.likeopera::text,     'f')
-        OR COALESCE(dim.users.liketheatre::text,   'f') <> COALESCE(s.liketheatre::text,   'f')
-        OR COALESCE(dim.users.likevegas::text,     'f') <> COALESCE(s.likevegas::text,     'f')
-        OR COALESCE(dim.users.likebroadway::text,  'f') <> COALESCE(s.likebroadway::text,  'f')
-        OR COALESCE(dim.users.likemusicals::text,  'f') <> COALESCE(s.likemusicals::text,  'f')
+DECODE(dim.users.username, s.username, 1, 0) = 0
+        OR DECODE(dim.users.firstname, s.firstname, 1, 0) = 0
+        OR DECODE(dim.users.lastname, s.lastname, 1, 0) = 0
+        OR DECODE(dim.users.city, s.city, 1, 0) = 0
+        OR DECODE(dim.users.state, s.state, 1, 0) = 0
+        OR DECODE(dim.users.email, s.email, 1, 0) = 0
+        OR DECODE(dim.users.phone, s.phone, 1, 0) = 0
+        OR DECODE(dim.users.likesports, s.likesports, 1, 0) = 0
+        OR DECODE(dim.users.liketheatre, s.liketheatre, 1, 0) = 0
+        OR DECODE(dim.users.likeconcerts, s.likeconcerts, 1, 0) = 0
+        OR DECODE(dim.users.likejazz, s.likejazz, 1, 0) = 0
+        OR DECODE(dim.users.likeclassical, s.likeclassical, 1, 0) = 0
+        OR DECODE(dim.users.likeopera, s.likeopera, 1, 0) = 0
+        OR DECODE(dim.users.likerock, s.likerock, 1, 0) = 0
+        OR DECODE(dim.users.likevegas, s.likevegas, 1, 0) = 0
+        OR DECODE(dim.users.likebroadway, s.likebroadway, 1, 0) = 0
+        OR DECODE(dim.users.likemusicals, s.likemusicals, 1, 0) = 0
       );
 
     GET DIAGNOSTICS v_changed_users = ROW_COUNT;
@@ -186,20 +186,24 @@ BEGIN
     -- Events change when venue info or event details change
     UPDATE dim.event
     SET
-        expiry_date = p_load_date - INTERVAL '1 day',
+        expiry_date = DATEADD(day, -1, p_load_date)::DATE,
         is_current  = FALSE
     FROM stage.event s
     WHERE dim.event.eventid    = s.eventid
       AND dim.event.is_current = TRUE
       AND (
-           COALESCE(dim.event.eventname,  '') <> COALESCE(s.eventname,  '')
-        OR COALESCE(dim.event.venuename,  '') <> COALESCE(s.venuename,  '')
-        OR COALESCE(dim.event.venuecity,  '') <> COALESCE(s.venuecity,  '')
-        OR COALESCE(dim.event.venuestate, '') <> COALESCE(s.venuestate, '')
-        OR COALESCE(dim.event.catname,    '') <> COALESCE(s.catname,    '')
-        OR COALESCE(dim.event.catgroup,   '') <> COALESCE(s.catgroup,   '')
-        OR dim.event.starttime             IS DISTINCT FROM s.starttime
-        OR dim.event.venueseats            IS DISTINCT FROM s.venueseats::INTEGER
+DECODE(dim.event.venueid, s.venueid, 1, 0) = 0
+        OR DECODE(dim.event.catid, s.catid, 1, 0) = 0
+        OR DECODE(dim.event.dateid, s.dateid, 1, 0) = 0
+        OR DECODE(dim.event.eventname, s.eventname, 1, 0) = 0
+        OR DECODE(dim.event.starttime, s.starttime, 1, 0) = 0
+        OR DECODE(dim.event.venuename, s.venuename, 1, 0) = 0
+        OR DECODE(dim.event.venuecity, s.venuecity, 1, 0) = 0
+        OR DECODE(dim.event.venuestate, s.venuestate, 1, 0) = 0
+        OR DECODE(dim.event.venueseats, s.venueseats, 1, 0) = 0
+        OR DECODE(dim.event.catgroup, s.catgroup, 1, 0) = 0
+        OR DECODE(dim.event.catname, s.catname, 1, 0) = 0
+        OR DECODE(dim.event.catdesc, s.catdesc, 1, 0) = 0
       );
 
     GET DIAGNOSTICS v_changed_events = ROW_COUNT;
@@ -273,8 +277,30 @@ AS $$
 DECLARE
     v_sales_inserted    INTEGER := 0;
     v_listings_inserted INTEGER := 0;
+    v_missing_sales INTEGER := 0;
+    v_missing_listings INTEGER := 0;
 BEGIN
     RAISE INFO 'sp_load_facts: Starting fact load for date %', p_load_date;
+
+    -- Fail fast if stage rows lack matching dimension surrogate keys.
+    -- INNER JOIN alone would silently discard these transactions.
+    SELECT COUNT(*) INTO v_missing_sales
+    FROM stage.sales s
+    LEFT JOIN dim.event de ON de.eventid = s.eventid AND de.is_current = TRUE
+    LEFT JOIN dim.users ds ON ds.userid = s.sellerid AND ds.is_current = TRUE
+    LEFT JOIN dim.users db ON db.userid = s.buyerid AND db.is_current = TRUE
+    WHERE de.event_key IS NULL OR ds.user_key IS NULL OR db.user_key IS NULL;
+
+    SELECT COUNT(*) INTO v_missing_listings
+    FROM stage.listing l
+    LEFT JOIN dim.event de ON de.eventid = l.eventid AND de.is_current = TRUE
+    LEFT JOIN dim.users du ON du.userid = l.sellerid AND du.is_current = TRUE
+    WHERE de.event_key IS NULL OR du.user_key IS NULL;
+
+    IF v_missing_sales > 0 OR v_missing_listings > 0 THEN
+        RAISE EXCEPTION 'Missing dimension references: sales=%, listings=%',
+            v_missing_sales, v_missing_listings;
+    END IF;
 
     -- ══════════════════════════════════════════════════════════
     -- FACT.SALES
