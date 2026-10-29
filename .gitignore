@@ -53,3 +53,9 @@ logs/
 *.tfstate.backup
 .terraform/
 cdk.out/
+
+# TICKIT local AWS deployment configuration
+/stepfunctions/config.local.json
+/stepfunctions/*.rendered.json
+/stepfunctions/*live*.json
+/stepfunctions/*.local.json
