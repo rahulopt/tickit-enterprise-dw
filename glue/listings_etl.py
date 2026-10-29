@@ -9,7 +9,7 @@ Why Spark:  >10M rows — Pandas would OOM (1.7GB CSV + DataFrame overhead
 
 Spike Day Configuration:
     Normal days:  2 workers G1.X (4GB each) = 8GB total
-    Spike days:   10 workers G2.X (8GB each) = 80GB total
+    Spike days:   10 workers G2.X (32GB each) = 320GB total
     We set: 10 workers G2.X + dynamic scaling enabled
 
 Key Spark Optimizations:
@@ -74,7 +74,7 @@ def main():
         StructField("listid",           IntegerType(),      True),
         StructField("sellerid",         IntegerType(),      True),
         StructField("eventid",          IntegerType(),      True),
-        StructField("dateid",           ShortType(),        True),
+        StructField("dateid",           IntegerType(),      True),
         StructField("numtickets",       ShortType(),        True),
         StructField("priceperticket",   DecimalType(8, 2),  True),
         StructField("totalprice",       DecimalType(8, 2),  True),

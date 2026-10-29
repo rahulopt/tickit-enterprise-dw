@@ -17,7 +17,13 @@ Flow:
     7. bronze/.done  ← THIS triggers the Lambda
 
 How it's connected:
-    S3 Event Notification → EventBridge → This Lambda → Step Functions
+    S3 Event Notification (direct) → This Lambda → Step Functions
+
+    NOTE: This Lambda uses the direct S3 Event Notification format
+    (event["Records"][0]["s3"]), NOT the EventBridge event format.
+    EventBridge S3 events use a different structure:
+      event["detail"]["bucket"]["name"] / event["detail"]["object"]["key"]
+    Do not switch to EventBridge routing without updating the parser below.
 
 Safeguard:
     - Only starts pipeline if key ends with '.done'

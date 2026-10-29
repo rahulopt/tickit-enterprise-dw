@@ -74,7 +74,7 @@ def main():
         StructField("sellerid",   IntegerType(),      True),
         StructField("buyerid",    IntegerType(),      True),
         StructField("eventid",    IntegerType(),      True),
-        StructField("dateid",     ShortType(),        True),
+        StructField("dateid",     IntegerType(),      True),
         StructField("qtysold",    ShortType(),        True),
         StructField("pricepaid",  DecimalType(8, 2),  True),
         StructField("commission", DecimalType(8, 2),  True),

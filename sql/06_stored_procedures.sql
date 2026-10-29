@@ -244,18 +244,22 @@ $$ LANGUAGE plpgsql;
 --
 -- Surrogate Key Lookup Pattern:
 --   Natural key (userid) → Surrogate key (user_key)
---   We look up the CURRENT version of the dimension record
---   at the TIME OF THE SALE (point-in-time lookup).
 --
---   For users: JOIN on userid WHERE effective_date <= saletime
---              AND expiry_date > saletime (or is_current for latest)
---   For simplicity in this pattern (since we process nightly and
---   tonight's sale uses tonight's user version):
---   JOIN on userid AND is_current = TRUE
---   
---   NOTE: This works because: we process sales nightly, dim is
---   updated BEFORE facts, so the current user_key is the correct
---   one for tonight's sales.
+--   This pipeline processes sales NIGHTLY. The sequence is:
+--     1. sp_load_dimensions runs first — closes changed versions,
+--        inserts new is_current=TRUE versions for tonight's data
+--     2. sp_load_facts runs after — joins to is_current=TRUE,
+--        which is the version valid for tonight's sales
+--
+--   JOIN on userid AND is_current = TRUE is correct here because:
+--     - Dimensions are updated before facts in the same nightly run
+--     - Tonight's sales occurred during tonight's user/event version
+--     - is_current = TRUE at fact load time = the right version
+--
+--   IMPORTANT: This is NOT a full point-in-time lookup. If you
+--   need to reprocess historical sales (e.g., replay 6 months ago),
+--   use effective_date <= sale_date AND expiry_date > sale_date
+--   instead of is_current = TRUE.
 --
 -- Idempotency:
 --   NOT EXISTS on salesid/listid prevents double-loading if

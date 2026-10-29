@@ -83,7 +83,7 @@ def main():
     df_event["eventid"] = df_event["eventid"].str.strip().astype("int32")
     df_event["venueid"] = pd.to_numeric(df_event["venueid"].str.strip(), errors="coerce").astype("Int16")
     df_event["catid"] = pd.to_numeric(df_event["catid"].str.strip(), errors="coerce").astype("Int16")
-    df_event["dateid"] = pd.to_numeric(df_event["dateid"].str.strip(), errors="coerce").astype("Int16")
+    df_event["dateid"] = pd.to_numeric(df_event["dateid"].str.strip(), errors="coerce").astype("Int32")
 
     df_venue["venueid"] = df_venue["venueid"].str.strip().astype("int16")
     df_cat["catid"] = df_cat["catid"].str.strip().astype("int16")
