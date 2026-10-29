@@ -14,14 +14,14 @@ The most important architecture decision in this project.
 
 **Glue Python Shell** (`1K–10M rows`):
 - users (2M rows, 282MB) and events (3M rows, 176MB)
-- 1 DPU = 4GB RAM = handles 282MB CSV comfortably
+- 1 DPU = 16GB RAM = handles 282MB CSV comfortably
 - Cost: $0.44/hour × (78s/3600) = ~$0.01 per run
 - Why not Spark? No cluster overhead, starts in seconds not minutes.
-- Real issue: At 0.0625 DPU (default 512MB), users job OOM'd with exit code 37.
+- Real issue: At 0.0625 DPU (default 1GB), users job OOM'd with exit code 37.
 
 **Glue Spark** (`>10M rows`):
 - listings (25M, 1.7GB) and sales (22.5M, 1.8GB)
-- 10 workers × G.2X (8GB each) = 80GB total memory
+- 10 workers × G.2X (32GB each) = 320GB total memory
 - Cost: $0.44 × 10 DPUs × (120s/3600) = ~$0.15 per run
 - Why Spark? 1.7GB CSV would OOM any single-node solution.
 
@@ -123,15 +123,17 @@ If Step Functions retries due to transient failure, the second run won't create 
 
 ## Cross-Region Consideration
 
-S3 bucket is in `us-east-1` (default region), Redshift is in `ap-south-1`.
+S3 bucket and Redshift are both in `ap-south-1` (same region).
 
-Redshift COPY requires explicit `REGION` parameter for cross-region:
+**Important:** Redshift `COPY` with `FORMAT AS PARQUET` does **not** support the `REGION` parameter — unlike CSV/JSON COPY. Attempting to use `REGION` with Parquet will throw an error.
+
 ```sql
+-- Correct: no REGION parameter for Parquet COPY
 COPY stage.users
 FROM 's3://bucket/silver/users/'
 FORMAT AS PARQUET
-IAM_ROLE 'arn:aws:iam::...:role/RedshiftServerlessRole'
-REGION 'us-east-1';  -- ← Required for cross-region
+IAM_ROLE 'arn:aws:iam::...:role/RedshiftServerlessRole';
+-- ↑ No REGION clause — S3 and Redshift must be in same region for Parquet COPY
 ```
 
-In production: keep S3 and Redshift in same region to avoid cross-region data transfer costs.
+Keeping S3 and Redshift in the same region also eliminates cross-region data transfer costs.

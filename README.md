@@ -240,8 +240,8 @@ echo "delivery complete" | aws s3 cp - s3://ent-dw-ticket-sales-ACCOUNT_ID/bronz
 | Issue | Root Cause | Solution |
 |-------|-----------|----------|
 | Lambda timeout | 15-min limit exceeded on large data | Switched to Glue Python Shell |
-| Glue OOM (exit code 37) | 0.0625 DPU (512MB) couldn't handle 282MB CSV | Increased to 1 DPU (4GB) |
-| Cross-region COPY error | S3 bucket (us-east-1) ≠ Redshift (ap-south-1) | Added `REGION 'us-east-1'` to COPY |
+| Glue OOM (exit code 37) | 0.0625 DPU (1GB) couldn't handle 282MB CSV | Increased to 1 DPU (16GB) |
+| Cross-region COPY error | S3 bucket (us-east-1) ≠ Redshift (ap-south-1) | Moved S3 bucket to ap-south-1 (same region as Redshift) — Parquet COPY does not support REGION parameter |
 | CSV header row error | `names=` param + header=True conflict | Used auto-detection with `dtype=str` |
 | Redshift DEFAULT params | Stored procedures don't support DEFAULT | Made all params required |
 | Spike day failures | Fixed workers couldn't handle 10x volume | G.2X × 10 workers + dynamic scaling |

@@ -103,7 +103,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 
 CREATE OR REPLACE PROCEDURE sp_load_dimensions(
-    p_load_date DATE DEFAULT CURRENT_DATE
+    p_load_date DATE
 )
 AS $$
 DECLARE
@@ -263,7 +263,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 
 CREATE OR REPLACE PROCEDURE sp_load_facts(
-    p_load_date DATE DEFAULT CURRENT_DATE
+    p_load_date DATE
 )
 AS $$
 DECLARE

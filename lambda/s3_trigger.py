@@ -88,8 +88,10 @@ def lambda_handler(event, context):
         }
 
     # ── Step 4: Start Step Functions execution ─────────────────────
-    load_date = datetime.utcnow().strftime("%Y-%m-%d")
-    execution_name = f"tickit-nightly-{load_date}"
+    now = datetime.utcnow()
+    load_date = now.strftime("%Y-%m-%d")
+    unique_suffix = now.strftime("%H%M%S")
+    execution_name = f"tickit-nightly-{load_date}-{unique_suffix}"
 
     response = sfn_client.start_execution(
         stateMachineArn=STATE_MACHINE_ARN,
