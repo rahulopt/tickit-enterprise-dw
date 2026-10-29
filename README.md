@@ -73,12 +73,12 @@ Both Sales and Listings CSVs contain timestamps with six fractional-second digit
 timestampFormat="yyyy-MM-dd HH:mm:ss.SSSSSS"
 ```
 
-Both scripts now fail when parsed transaction timestamps are NULL. The corrected Silver output and Redshift staging were verified to contain **0 NULL transaction timestamps** across all **47.5 million** Sales + Listings rows. The code in this repository must be synchronized with those deployed V2 versions (see [deployment sync notes](docs/VERIFIED_METRICS.md)).
+Both scripts now fail when parsed transaction timestamps are NULL. The corrected Silver output and Redshift staging were verified to contain **0 NULL transaction timestamps** across all **47.5 million** Sales + Listings rows. The repository scripts include this parsing fix and the NULL checks. Full deployed-versus-repository parity has not been verified (see [verification notes](docs/VERIFIED_METRICS.md)).
 
 ## Data model and semantics
 
 - `dim.users` and `dim.event` use Redshift `IDENTITY` surrogate keys (`user_key`, `event_key`) and have SCD2-supporting columns: `effective_date`, `expiry_date`, `is_current`.
-- The deployed `sp_load_dimensions(DATE)` currently implements **initial/idempotent current-version insertion** (`NOT EXISTS`); **automatic SCD Type 2 attribute-change detection, old-version expiry and new-version creation have not been implemented or verified**.
+- The last verified deployed `sp_load_dimensions(DATE)` implements **initial/idempotent current-version insertion** (`NOT EXISTS`). The repository procedure contains daily SCD2 change detection and version expiry/insertion, but deployment and execution of that logic have not been verified.
 - The deployed `sp_load_facts(DATE)` resolves the **current** event, seller and buyer surrogate keys and skips existing `salesid` / `listid`. Its date argument currently labels the run, **not** a date filter. It does **not** perform historical point-in-time SCD2 lookups.
 - `dateid` is the source **event-date key**, not the actual transaction date. `saletime` and `listtime` carry transaction timestamps (observed source values in 2023–2025); do not infer transaction dates from `dateid`.
 
@@ -94,7 +94,7 @@ The warehouse supports analyses such as revenue by venue and event category, hig
 - **Orchestration definition:** AWS Step Functions V2 (`tickit-nightly-pipeline-v2`), SNS
 - **Warehouse:** Redshift Serverless workgroup `ent-dw-1`, separate database `tickit_v2`
 - **Design:** staging layer, denormalized event/user dimensions, role-playing user dimension for buyer and seller, fact tables with surrogate key lookups
-- **Isolation:** V2 uses dedicated S3 `tickit-v2/` prefixes and `tickit_v2` database; the original `dev` database is not the V2 target.
+- **Isolation:** V2 writes Silver outputs under `tickit-v2/silver/` and uses the `tickit_v2` database; source CSVs remain under `bronze/`. The original `dev` database is not the V2 target.
 
 ## Repository layout
 
@@ -118,7 +118,32 @@ tools/
 tests/
 ```
 
-For deployment, use placeholders for AWS account-specific ARNs, S3 bucket IDs and IAM roles. Never commit secrets or raw credentials. The supplied sync script exports a sanitized Step Functions template with `ACCOUNT_ID` placeholders; replace those placeholders before deployment. Compare Git-tracked Glue and SQL definitions with deployed `tickit-v2` resources before asserting reproducibility.
+## Workflow configuration
+
+The single workflow source is `stepfunctions/tickit_pipeline_v2.template.json`. It uses `{{CONFIG_KEY}}` placeholders. Create `stepfunctions/config.local.json` from the example configuration and replace its `REPLACE_WITH_...` values, or extract settings from an existing deployed definition. Then render it:
+
+```bash
+python3 tools/tickit_workflow.py render
+```
+
+This writes `stepfunctions/tickit_pipeline_v2.rendered.json`; local configuration and rendered output are ignored by Git. Rendering does not deploy or start the workflow. See the [configuration and deployment instructions](docs/STEP_FUNCTIONS_PARAMETERIZATION.md) for extraction, AWS validation, and deployment steps.
+
+The workflow configuration does not configure the ETL scripts or deploy AWS resources. Review the scripts' bucket and prefix constants, Lambda environment settings, Glue job definitions, IAM permissions, and SQL separately for your environment. Compare repository definitions with deployed V2 resources before asserting reproducibility. Never commit secrets or raw credentials.
+
+## Local checks
+
+Offline tests were checked with Python 3.11 and require `pytest`, `boto3`, and `pandas`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install pytest boto3 pandas
+python -m pytest -q
+```
+
+Tests stub Parquet output and AWS clients; they do not need AWS credentials or PyArrow. Running the pandas ETL scripts requires PyArrow for Parquet output; Spark jobs require the Glue/Spark runtime. These tests do not establish live AWS integration or Redshift SQL execution.
+
+See the [architecture details](docs/architecture.md) for loading behavior and implementation limits.
 
 ## Validation SQL
 
@@ -165,7 +190,7 @@ queries that depend on source date IDs.
 
 The Step Functions workflow does not currently initialize `dim.date`.
 The V2 warehouse was initialized manually before loading dimensions
-and facts. Full SCD Type 2 change tracking remains future work.
+and facts. Full SCD Type 2 change tracking remains unverified in the deployed V2 warehouse.
 
 ### Analytical Views
 

@@ -39,7 +39,7 @@ aws stepfunctions update-state-machine --state-machine-arn arn:aws:states:us-eas
 5. Commit only the template, example configuration, renderer, and documentation:
 
 ```bash
-git add stepfunctions/tickit_pipeline_v2.template.json stepfunctions/config.example.json stepfunctions/.gitignore tools/tickit_workflow.py docs/STEP_FUNCTIONS_PARAMETERIZATION.md
+git add stepfunctions/tickit_pipeline_v2.template.json stepfunctions/config.example.json .gitignore tools/tickit_workflow.py docs/STEP_FUNCTIONS_PARAMETERIZATION.md
 git diff --cached --stat
 git commit -m "Parameterize Step Functions environment configuration"
 git push origin main
