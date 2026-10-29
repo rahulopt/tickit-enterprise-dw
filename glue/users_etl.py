@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 S3_BUCKET = "ent-dw-ticket-sales-519749210589"
 BRONZE_KEY = "bronze/users.csv"
-SILVER_PREFIX = "silver/users/"
+SILVER_PREFIX = "tickit-v2/silver/users/"
 
 # Column definitions
 COLUMNS = [
@@ -55,7 +55,7 @@ BOOL_COLUMNS = [
 
 DTYPE_MAP = {col: str for col in COLUMNS}
 
-s3_client = boto3.client("s3", region_name="ap-south-1")
+s3_client = boto3.client("s3", region_name="us-east-1")
 
 def main():
     logger.info("=" * 60)

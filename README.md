@@ -1,306 +1,148 @@
-# TICKIT Enterprise Data Warehouse 🎫
+# TICKIT Enterprise Data Warehouse V2 🎫
 
-A production-grade data warehouse built on AWS, processing **52.5 million records** from a ticket resale marketplace (similar to Ticketmaster).
+**AWS data engineering portfolio project | 52,500,213 records validated in Amazon Redshift staging | 47,500,000 fact records**
 
-## 🏗️ Architecture
+Built a ticket-resale analytics warehouse using an S3 Bronze → Parquet Silver → Redshift dimensional-model architecture. The **core V2 warehouse load has been executed and validated** in `us-east-1` as of **29 October 2026**. The six Silver ETL outputs were validated individually; a complete Step Functions execution has **not** yet been demonstrated.
 
-```
-Bronze (S3 CSV)  →  Silver (S3 Parquet)  →  Gold (Redshift Star Schema)
-     ↓                      ↓                          ↓
-  Raw CSVs          ETL Cleaned Data          Analytics-Ready DW
-```
+> **Verification policy:** The numbers below come from recorded AWS CLI, PyArrow and Redshift SQL checks. Projected savings, untested end-to-end runtimes and unverified business-query results are intentionally excluded.
 
-### Full Pipeline Flow
-```
-S3 .done file upload
-        ↓
-  Lambda (S3 Trigger)
-        ↓
-  Step Functions
-        ↓
-┌─────────────────────────────────────┐
-│   Parallel ETL (6 jobs, ~2 min)     │
-│  Lambda: category, venue            │
-│  Glue Shell: users, events          │
-│  Glue Spark: listings, sales        │
-└─────────────────────────────────────┘
-        ↓
-  sp_load_staging (COPY → Redshift)
-        ↓
-  sp_load_dimensions (SCD Type 2)
-        ↓
-  sp_load_facts (Surrogate Key Lookup)
-        ↓
-  SNS Publish (SMS/Email notification)
-        ↓
-    ✅ Pipeline Complete
+## Architecture
+
+```text
+Source CSVs (S3 Bronze)
+           │
+           ▼
+  ETL (two Lambda + four AWS Glue jobs)
+  ├─ category / venue              → Lambda + Parquet
+  ├─ users / events                 → Glue Python Shell + Parquet
+  └─ listing / sales                → Glue Spark + Snappy Parquet
+           │
+           ▼
+ S3 Silver: tickit-v2/silver/{dataset}/
+           │
+           ▼
+ Amazon Redshift Serverless: database tickit_v2
+  ├─ stage: category, venue, users, event, listing, sales
+  ├─ dim: date, users, event
+  └─ fact: listing, sales
 ```
 
-### Step Functions Orchestration (Live Execution)
+The deployed **Step Functions V2 definition** orchestrates six parallel ETL tasks, waits for Glue completion (`glue:startJobRun.sync`), then submits and polls Redshift stored-procedure statements (`staging → dimensions → facts`), and publishes SNS success/failure notifications. **Its configuration has been inspected; a successful full execution has not been verified.** Do not describe this as an end-to-end benchmark.
 
-The complete pipeline is orchestrated by AWS Step Functions. All 6 ETL jobs run in parallel, followed by sequential Redshift loading stages (staging → dimensions → facts) with polling-based status checks. The pipeline ends with an SNS publish: a success notification on completion (`NotifySuccess`), or a stage-specific failure notification (`NotifyETLFailed`, `NotifyStagingFailed`, `NotifyDimensionsFailed`, `NotifyFactsFailed`) caught via `Catch` blocks on every step:
+## Verified dataset and warehouse counts
 
-![Step Functions Pipeline](docs/images/stepfunctions_graph.png)
+| Dataset | Silver Parquet files | Redshift `stage` rows | Additional verification |
+|---|---:|---:|---|
+| Category | 1 | 11 | Redshift Category COPY smoke test passed |
+| Venue | 1 | 202 | Source schema and row count checked |
+| Users | 1 | 2,000,000 | Unique, non-null `userid` |
+| Events | 1 | 3,000,000 | Unique, non-null `eventid`; enriched 13-column Parquet |
+| Listings | 10 | 25,000,000 | **0 NULL `listtime`** in Silver and Redshift staging |
+| Sales | 10 | 22,500,000 | **0 NULL `saletime`** in Silver and Redshift staging |
+| **Total** | **24** | **52,500,213** | **All six staging counts reconciled** |
 
-## 📊 Dataset
+### Dimensional warehouse
 
-| Table | Records | File Size | Processing |
-|-------|---------|-----------|------------|
-| Categories | 11 | 487 B | Lambda |
-| Venues | 202 | 9.1 KB | Lambda |
-| Users | 2M | 282 MB | Glue Python Shell |
-| Events | 3M | 176 MB | Glue Python Shell |
-| Listings | 25M | 1.7 GB | Glue Spark |
-| Sales | 22.5M | 1.8 GB | Glue Spark |
-| **Total** | **~52.5M** | **~4 GB** | |
+| Redshift table | Verified rows | Validation |
+|---|---:|---|
+| `dim.date` | 2,556 | Preloaded date dimension; date-key mapping previously verified |
+| `dim.users` | 2,000,000 | 2M current rows; 2M unique current `userid`; 0 NULL `user_key` |
+| `dim.event` | 3,000,000 | 3M current rows; 3M unique current `eventid`; 0 NULL `event_key` |
+| `fact.listing` | 25,000,000 | 0 rows with missing event/seller key or NULL `listtime` |
+| `fact.sales` | 22,500,000 | 0 rows with missing event/seller/buyer key or NULL `saletime` |
+| **Facts combined** | **47,500,000** | **Both fact counts match staging** |
 
-## 🎯 Business Requirements Answered
+**Note:** Stage, dimension and fact counts represent different layers of the same data; do not add them together as distinct marketplace records.
 
-| Question | Answer |
-|----------|--------|
-| Which venues make the most money? | Top: Jacobs Inc Arena, Jacksonville — $82.5M |
-| Who are our best customers? | Top: Matthew Kim — $30,043 spent |
-| What events sell best? | CONCERTS/Pop — $1.48B total revenue |
-| Historical tracking? | SCD Type 2 on dim.users & dim.event |
+## Measured processing results (29 October 2026)
 
-## 🏛️ Star Schema
+| Operation | Observed AWS result | Scope |
+|---|---:|---|
+| Events Glue Python Shell | **39 seconds**, **1 DPU** | Individual `tickit-events-etl-v2` job (3M rows) |
+| Listings Glue Spark | **132 seconds**, **10 × G.1X workers** | Individual successful Listings V2 rerun (25M rows) |
+| Redshift staging stored procedure | **19.39 seconds** | `DescribeStatement.Duration`, all 6 staging loads |
+| Redshift facts stored procedure | **14.58 seconds** | `DescribeStatement.Duration`, Sales + Listings facts |
 
+These are **individual execution measurements**, not a sum or an end-to-end pipeline runtime. AWS Redshift Data API reports `Duration` in nanoseconds, converted here to seconds. No reproducible cost-savings percentage, complete Bronze-to-Gold wall-clock runtime, or full storage-reduction percentage has been established for V2.
+
+## Data-quality issue found and fixed
+
+Both Sales and Listings CSVs contain timestamps with six fractional-second digits, such as `2025-07-16 13:58:49.437077`. The original Glue Spark scripts specified `timestampFormat="yyyy-MM-dd HH:mm:ss"`, causing timestamp values to parse as NULL. V2 scripts were updated to:
+
+```python
+timestampFormat="yyyy-MM-dd HH:mm:ss.SSSSSS"
 ```
-                    dim.date
-                       │
-dim.users (seller) ────┤
-                       │
-dim.users (buyer)  ────┼──── fact.sales ──── dim.event (denormalized)
-                       │         │
-                       │    fact.listing
-                       │
-                    dim.users (seller)
+
+Both scripts now fail when parsed transaction timestamps are NULL. The corrected Silver output and Redshift staging were verified to contain **0 NULL transaction timestamps** across all **47.5 million** Sales + Listings rows. The code in this repository must be synchronized with those deployed V2 versions (see [deployment sync notes](docs/VERIFIED_METRICS.md)).
+
+## Data model and semantics
+
+- `dim.users` and `dim.event` use Redshift `IDENTITY` surrogate keys (`user_key`, `event_key`) and have SCD2-supporting columns: `effective_date`, `expiry_date`, `is_current`.
+- The deployed `sp_load_dimensions(DATE)` currently implements **initial/idempotent current-version insertion** (`NOT EXISTS`); **automatic SCD Type 2 attribute-change detection, old-version expiry and new-version creation have not been implemented or verified**.
+- The deployed `sp_load_facts(DATE)` resolves the **current** event, seller and buyer surrogate keys and skips existing `salesid` / `listid`. Its date argument currently labels the run, **not** a date filter. It does **not** perform historical point-in-time SCD2 lookups.
+- `dateid` is the source **event-date key**, not the actual transaction date. `saletime` and `listtime` carry transaction timestamps (observed source values in 2023–2025); do not infer transaction dates from `dateid`.
+
+## Business questions enabled (queries, not claimed results)
+
+The warehouse supports analyses such as revenue by venue and event category, high-value buyers, tickets listed versus sold, and transaction trends. **No specific top venue, top buyer, category revenue or cost-saving outcome is claimed here without independently run and saved query evidence.**
+
+## AWS implementation
+
+- **Region:** `us-east-1` (N. Virginia)
+- **Storage:** Amazon S3 (Bronze CSV, Silver Parquet/Snappy)
+- **ETL:** AWS Lambda, Glue Python Shell, Glue Spark
+- **Orchestration definition:** AWS Step Functions V2 (`tickit-nightly-pipeline-v2`), SNS
+- **Warehouse:** Redshift Serverless workgroup `ent-dw-1`, separate database `tickit_v2`
+- **Design:** staging layer, denormalized event/user dimensions, role-playing user dimension for buyer and seller, fact tables with surrogate key lookups
+- **Isolation:** V2 uses dedicated S3 `tickit-v2/` prefixes and `tickit_v2` database; the original `dev` database is not the V2 target.
+
+## Repository layout
+
+```text
+README.md
+BUGFIX_REPORT.md
+docs/
+  VERIFIED_METRICS.md          # measured evidence and limitations
+  architecture.md
+lambda/
+glue/
+  users_etl.py
+  events_etl.py
+  listings_etl.py
+  sales_etl.py
+sql/
+step-functions/
+tests/
 ```
 
-### Physical Design Decisions
+For deployment, use placeholders for AWS account-specific ARNs, S3 bucket IDs and IAM roles. Never commit secrets or raw credentials. The supplied sync script exports a sanitized Step Functions template with `ACCOUNT_ID` placeholders; replace those placeholders before deployment. Compare Git-tracked Glue and SQL definitions with deployed `tickit-v2` resources before asserting reproducibility.
 
-| Table | DISTKEY | SORTKEY | Reason |
-|-------|---------|---------|--------|
-| fact.sales | eventid | dateid, eventid | Co-locate with dim.event (hottest join — revenue by venue) |
-| fact.listing | eventid | dateid, eventid | Same pattern |
-| dim.users | userid | userid, effective_date | SCD2 point-in-time lookup. Note: seller/buyer joins from fact.sales are cross-node (fact.sales DISTKEY=eventid ≠ userid) — accepted tradeoff for the hotter fact→event join |
-| dim.event | eventid | eventid, effective_date | Matches fact.sales DISTKEY — fact→event join is node-local |
-| dim.date | ALL | dateid | Tiny table, replicate everywhere |
-| stage.* | EVEN | — | Parallel COPY throughput |
-
-## 💰 Cost Optimization
-
-| Strategy | Savings |
-|----------|---------|
-| Lambda for <1K rows (vs Glue) | ~99% cheaper |
-| Python Shell for 1K-10M rows (vs Spark) | ~60% cheaper |
-| Spark only for >10M rows | Right-sized compute |
-| Parallel execution (6 jobs) | Sequential ~7 min → parallel ~2 min (ETL stage) |
-| Parquet compression | 80% storage reduction vs CSV |
-
-**Overall: 60-90% cost reduction vs all-Spark approach**
-
-## 🔄 SCD Type 2
-
-Tracks historical changes in `dim.users` and `dim.event`:
+## Validation SQL
 
 ```sql
--- Old version (when user moves city)
-userid=1, city='Jacksonland', is_current=False, expiry_date='2026-09-12'
+-- Redshift Serverless, database tickit_v2
+SELECT 'sales' AS dataset, COUNT(*) AS rows,
+       COUNT(*) - COUNT(saletime) AS null_times
+FROM stage.sales
+UNION ALL
+SELECT 'listing', COUNT(*), COUNT(*) - COUNT(listtime)
+FROM stage.listing;
 
--- New version
-userid=1, city='New York',    is_current=True,  expiry_date='9999-12-31'
+SELECT COUNT(*) AS sales_rows,
+       SUM(CASE WHEN event_key IS NULL OR seller_key IS NULL OR buyer_key IS NULL
+                     OR saletime IS NULL THEN 1 ELSE 0 END) AS invalid_rows
+FROM fact.sales;
+
+SELECT COUNT(*) AS listing_rows,
+       SUM(CASE WHEN event_key IS NULL OR seller_key IS NULL
+                     OR listtime IS NULL THEN 1 ELSE 0 END) AS invalid_rows
+FROM fact.listing;
 ```
 
-Historical sales stay linked to the OLD user version via surrogate key — enabling point-in-time reporting.
+## Verification status and next engineering work
 
-## 📁 Repository Structure
+**Verified:** individual ETL results; Silver row counts; corrected transaction timestamps; Redshift staging procedure execution and row counts; initial dimension load and current-key uniqueness; fact procedure execution, row counts and missing-key/timestamp checks.
 
-```
-tickit-dw/
-├── README.md
-├── .gitignore
-│
-├── sql/                          # Redshift DDL & Stored Procedures
-│   ├── 01_create_schemas.sql     # stage, dim, fact schemas
-│   ├── 02_stage_tables.sql       # 6 staging tables (DISTSTYLE EVEN)
-│   ├── 03_dim_tables.sql         # dim.date, dim.users, dim.event (SCD2)
-│   ├── 04_fact_tables.sql        # fact.sales, fact.listing
-│   ├── 05_load_dim_date.sql      # Calendar table population
-│   ├── 06_stored_procedures.sql  # sp_load_staging, sp_load_dimensions, sp_load_facts
-│   └── 07_analytical_views.sql   # 5 business views (venue, seller, events, monthly, category)
-│
-├── lambda/                       # Lambda ETL functions
-│   ├── category_etl.py           # Bronze CSV → Silver Parquet (11 rows)
-│   ├── venue_etl.py              # Bronze CSV → Silver Parquet (202 rows)
-│   └── s3_trigger.py             # .done file → triggers Step Functions
-│
-├── glue/                         # AWS Glue ETL scripts
-│   ├── users_etl.py              # Python Shell - 2M rows (1 DPU)
-│   ├── events_etl.py             # Python Shell - 3M rows, denormalized (1 DPU)
-│   ├── listings_etl.py           # Spark - 25M rows (10 × G.2X workers)
-│   └── sales_etl.py              # Spark - 22.5M rows (10 × G.2X workers)
-│
-├── step-functions/
-│   └── tickit_pipeline.json      # State machine (6 parallel ETL → stage → dim → fact → SNS notify)
-│
-└── docs/
-    └── architecture.md           # Detailed architecture decisions
-```
+**Not yet verified / incomplete:** a full V2 Step Functions execution, schedule/trigger integration, automatic SCD2 updates, point-in-time dimensional joins, measured cost savings, and deployed-versus-repository parity for every SQL artifact. A syntactically valid Step Functions definition is not proof of a successful execution.
 
-## 🚀 Setup & Deployment
-
-### Prerequisites
-- AWS CLI configured with appropriate permissions
-- Python 3.9+
-- AWS account with Redshift Serverless, Glue, Lambda, Step Functions access
-
-### Step 1: Infrastructure
-```bash
-# Create S3 bucket (replace ACCOUNT_ID)
-aws s3 mb s3://ent-dw-ticket-sales-ACCOUNT_ID --region ap-south-1
-
-# Create IAM roles (see docs/architecture.md for policy details)
-# - RedshiftServerlessRole
-# - TickitGlueRole
-# - TickitLambdaRole
-# - TickitStepFunctionsRole
-
-# Create Redshift Serverless
-aws redshift-serverless create-namespace --namespace-name ent-dw-1 \
-    --admin-username admin --admin-user-password <password> \
-    --db-name tickit \
-    --default-iam-role-arn arn:aws:iam::ACCOUNT_ID:role/RedshiftServerlessRole
-
-aws redshift-serverless create-workgroup --workgroup-name ent-dw-1 \
-    --namespace-name ent-dw-1 --base-capacity 8
-```
-
-### Step 2: Deploy DDL
-```bash
-# Run SQL scripts in order via Redshift Data API or Query Editor
-# 01_create_schemas.sql → 02_stage_tables.sql → 03_dim_tables.sql
-# → 04_fact_tables.sql → 05_load_dim_date.sql
-# → 06_stored_procedures.sql → 07_analytical_views.sql
-```
-
-### Step 3: Deploy ETL Jobs
-```bash
-# Upload Glue scripts
-aws s3 sync glue/ s3://ent-dw-ticket-sales-ACCOUNT_ID/glue-scripts/
-
-# Deploy Lambda functions
-cd lambda
-zip -FS category_etl.zip category_etl.py
-zip -FS venue_etl.zip venue_etl.py
-zip -FS s3_trigger.zip s3_trigger.py
-
-aws lambda create-function --function-name tickit-category-etl \
-    --runtime python3.12 --handler category_etl.lambda_handler \
-    --role arn:aws:iam::ACCOUNT_ID:role/TickitLambdaRole \
-    --zip-file fileb://category_etl.zip
-
-# Add pandas layer
-aws lambda update-function-configuration \
-    --function-name tickit-category-etl \
-    --layers arn:aws:lambda:ap-south-1:336392948345:layer:AWSSDKPandas-Python312:16
-```
-
-### Step 4: Create Step Functions
-```bash
-aws stepfunctions create-state-machine \
-    --name tickit-nightly-pipeline \
-    --type STANDARD \
-    --role-arn arn:aws:iam::ACCOUNT_ID:role/TickitStepFunctionsRole \
-    --definition file://step-functions/tickit_pipeline.json
-```
-
-### Step 5: Configure S3 Trigger
-```bash
-# Grant S3 permission to invoke Lambda
-aws lambda add-permission --function-name tickit-s3-trigger \
-    --statement-id s3-tickit-trigger \
-    --action lambda:InvokeFunction \
-    --principal s3.amazonaws.com \
-    --source-arn arn:aws:s3:::ent-dw-ticket-sales-ACCOUNT_ID
-
-# Configure S3 notification (see docs for full config)
-```
-
-### Step 6: Trigger Pipeline
-```bash
-# Upload source data to bronze
-aws s3 cp data/ s3://ent-dw-ticket-sales-ACCOUNT_ID/bronze/ --recursive
-
-# Drop .done file to start pipeline
-echo "delivery complete" | aws s3 cp - s3://ent-dw-ticket-sales-ACCOUNT_ID/bronze/.done
-```
-
-## 🔧 Real-World Issues Solved
-
-| Issue | Root Cause | Solution |
-|-------|-----------|----------|
-| Lambda timeout | 15-min limit exceeded on large data | Switched to Glue Python Shell |
-| Glue OOM (exit code 37) | 0.0625 DPU (1GB) couldn't handle 282MB CSV | Increased to 1 DPU (16GB) |
-| Cross-region COPY error | S3 bucket (us-east-1) ≠ Redshift (ap-south-1) | Moved S3 bucket to ap-south-1 (same region as Redshift) — Parquet COPY does not support REGION parameter |
-| CSV header row error | `names=` param + header=True conflict | Used auto-detection with `dtype=str` |
-| Redshift DEFAULT params | Stored procedures don't support DEFAULT | Made all params required |
-| Spike day failures | Fixed workers couldn't handle 10x volume | G.2X × 10 workers + dynamic scaling |
-
-## 📈 Performance Results
-
-**Note:** The 6 ETL jobs run **in parallel**, so wall-clock time for the ETL stage equals the *slowest* job (~2 min), not the sum. Redshift stages run sequentially after ETL. The pipeline also includes fixed `Wait` states between Redshift polling checks.
-
-| Stage | Data | Time (individual) |
-|-------|------|-------------------|
-| Lambda: category | 11 rows | 3s |
-| Lambda: venue | 202 rows | 3s |
-| Glue Shell: users | 2M rows | 78s |
-| Glue Shell: events | 3M rows | 57s |
-| Glue Spark: listings | 25M rows | 119s |
-| Glue Spark: sales | 22.5M rows | 125s |
-| Redshift COPY (all 6) | 52.5M rows | 31s |
-| SCD Type 2 (dim load) | 5M rows | 21s |
-| Fact load | 47.5M rows | 31s |
-
-**End-to-end pipeline (verified run):** ~9 minutes wall-clock
-- ETL stage (6 jobs parallel): ~2 min (bounded by slowest Spark job)
-- Redshift staging + dimensions + facts: ~1.5 min compute
-- Fixed `Wait` states for async polling: ~6 min (tunable)
-
-Compared to a naive sequential all-Spark approach (~15+ min), parallel execution and right-sized compute cut both time and cost.
-
-## 🛠️ Tech Stack
-
-- **Storage:** Amazon S3 (Bronze/Silver layers)
-- **Compute:** AWS Lambda, AWS Glue (Python Shell + Spark)
-- **Warehouse:** Amazon Redshift Serverless
-- **Orchestration:** AWS Step Functions
-- **Trigger:** S3 Event Notifications → Lambda
-- **Notifications:** Amazon SNS (SMS/Email) — success + stage-specific failure alerts
-- **Languages:** Python 3.12, PySpark, SQL (Redshift)
-- **Libraries:** Pandas, PyArrow, boto3
-
-## 👤 Author
-
-Rahul Singh Rana
-
-
-## Offline regression tests and release precautions
-
-From the repository root, install `pytest`, `pandas`, and `boto3` and run
-`python -m pytest -q`. These tests validate key Lambda/Glue transformations,
-S3-trigger idempotency behavior, the ASL workflow graph, and core SQL invariants.
-They **do not** execute Spark, Redshift, or Step Functions in AWS. Run a full
-end-to-end integration test before replacing deployed resources.
-
-The included `lambda/*.zip` packages are regenerated from their matching `.py`
-source files. Rebuild these ZIPs after any Lambda changes before publishing a
-new AWS Lambda function version. Configure the state machine, S3 bucket,
-Redshift workgroup, and IAM resources for your target AWS account.
-
-The date dimension currently assumes sequential source `dateid` values beginning
-on 2008-01-01; confirm the keys and the source calendar range against the actual
-Bronze files before running `05_load_dim_date.sql`. The S3 trigger uses one
-Standard execution name per UTC day, so intentional same-day reruns require
-a deliberate new execution name and controlled reprocessing.
+See [verified metrics and evidence](docs/VERIFIED_METRICS.md) for the underlying measurements and honest limitations.

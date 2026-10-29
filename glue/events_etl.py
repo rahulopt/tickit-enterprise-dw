@@ -38,9 +38,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 S3_BUCKET = "ent-dw-ticket-sales-519749210589"
-SILVER_PREFIX = "silver/event/"
+SILVER_PREFIX = "tickit-v2/silver/event/"
 
-s3_client = boto3.client("s3", region_name="ap-south-1")
+s3_client = boto3.client("s3", region_name="us-east-1")
 
 
 def _read_csv_from_s3(key: str, names=None, dtype=str) -> pd.DataFrame:

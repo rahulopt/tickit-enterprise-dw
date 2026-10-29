@@ -51,7 +51,7 @@ logger.setLevel(logging.INFO)
 # ── Constants ───────────────────────────────────────────────────
 S3_BUCKET = "ent-dw-ticket-sales-519749210589"
 BRONZE_PATH = f"s3://{S3_BUCKET}/bronze/listing.csv"
-SILVER_PATH = f"s3://{S3_BUCKET}/silver/listing/"
+SILVER_PATH = f"s3://{S3_BUCKET}/tickit-v2/silver/listing/"
 
 
 def main():
@@ -88,8 +88,11 @@ def main():
         schema=listing_schema,
         header=True,
         nullValue="",
-        timestampFormat="yyyy-MM-dd HH:mm:ss",
+        timestampFormat="yyyy-MM-dd HH:mm:ss.SSSSSS",
     )
+
+    if df.filter("listtime IS NULL").limit(1).count():
+        raise ValueError("listings: NULL listtime detected after CSV parsing")
 
     raw_count = df.count()
     logger.info(f"Bronze read: {raw_count:,} rows")
