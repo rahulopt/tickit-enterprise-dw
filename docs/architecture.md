@@ -21,8 +21,8 @@ The most important architecture decision in this project.
 
 **Glue Spark** (`>10M rows`):
 - listings (25M, 1.7GB) and sales (22.5M, 1.8GB)
-- 10 workers × G.2X (32GB each) = 320GB total memory
-- Cost: $0.44 × 10 DPUs × (120s/3600) = ~$0.15 per run
+- 10 workers × G.2X (32GB each, 2 DPUs per worker) = 20 DPUs total
+- Cost: $0.44 × 20 DPUs × (120s/3600) = ~$0.29 per run
 - Why Spark? 1.7GB CSV would OOM any single-node solution.
 
 ### 2. Star Schema with Denormalization
