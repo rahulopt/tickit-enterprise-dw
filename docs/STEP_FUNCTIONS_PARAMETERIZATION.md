@@ -6,7 +6,7 @@ This update preserves the deployed 6-branch ETL → Redshift staging → dimensi
 
 ## From inside the repository
 
-Copy the contents of this package's `stepfunctions/`, `tools/`, and `docs/` into the corresponding repo folders. Keep any existing files.
+`stepfunctions/tickit_pipeline_v2.template.json` is the single workflow source. The renderer and tests both use this file. `config.example.json` supplies configuration fields, not a second workflow; rendering produces a deployment artifact that is excluded from Git.
 
 1. Back up your current state-machine definition and discover configuration from the running AWS resource:
 

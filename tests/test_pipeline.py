@@ -214,7 +214,7 @@ def test_workflow_all_references_exist_and_failed_statuses_captured():
         "S3_BUCKET": "test-tickit-bucket",
     })
     flow = renderer.render(
-        json.loads((ROOT / "step-functions/tickit_pipeline.json").read_text()), config
+        json.loads((ROOT / "stepfunctions/tickit_pipeline_v2.template.json").read_text()), config
     )
     assert flow["TimeoutSeconds"] > 0
     states = flow["States"]

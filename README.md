@@ -111,7 +111,11 @@ glue/
   listings_etl.py
   sales_etl.py
 sql/
-step-functions/
+stepfunctions/
+  tickit_pipeline_v2.template.json # single workflow source; render before deployment
+  config.example.json             # example deployment configuration
+tools/
+  tickit_workflow.py               # renders the deployable workflow definition
 tests/
 ```
 
