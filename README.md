@@ -81,10 +81,10 @@ dim.users (buyer)  ────┼──── fact.sales ──── dim.event
 
 | Table | DISTKEY | SORTKEY | Reason |
 |-------|---------|---------|--------|
-| fact.sales | eventid | dateid, eventid | Co-locate with dim.event (hottest join) |
+| fact.sales | eventid | dateid, eventid | Co-locate with dim.event (hottest join — revenue by venue) |
 | fact.listing | eventid | dateid, eventid | Same pattern |
-| dim.users | userid | userid, effective_date | SCD2 point-in-time lookup |
-| dim.event | eventid | eventid, effective_date | SCD2 + event join |
+| dim.users | userid | userid, effective_date | SCD2 point-in-time lookup. Note: seller/buyer joins from fact.sales are cross-node (fact.sales DISTKEY=eventid ≠ userid) — accepted tradeoff for the hotter fact→event join |
+| dim.event | eventid | eventid, effective_date | Matches fact.sales DISTKEY — fact→event join is node-local |
 | dim.date | ALL | dateid | Tiny table, replicate everywhere |
 | stage.* | EVEN | — | Parallel COPY throughput |
 

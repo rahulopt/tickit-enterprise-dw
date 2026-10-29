@@ -49,8 +49,17 @@ At 22.5M rows in fact.sales, eliminating 2 joins per query = significant perform
 
 **DISTKEY(eventid) on fact.sales and dim.event:**
 - Most analytical queries: "revenue by venue" → requires fact.sales JOIN dim.event
-- With matching DISTKEY, this join is node-local (no network shuffle)
-- Alternative considered: DISTKEY(userid) — rejected because users appear as both seller AND buyer (role-playing dimension), requiring 2 joins vs 1 for eventid
+- With matching DISTKEY(eventid) on both tables, this join is node-local (no network shuffle)
+- This is the hottest join path — optimising it is the highest-value DISTKEY choice
+
+**DISTKEY(userid) on dim.users:**
+- dim.users is a role-playing dimension: fact.sales joins it TWICE (sellerid + buyerid)
+- fact.sales has DISTKEY(eventid), dim.users has DISTKEY(userid) — these do NOT match
+- Therefore seller and buyer lookups in sp_load_facts are cross-node (broadcast or redistribution)
+- This is an accepted tradeoff: the fact→event join (revenue by venue) is far more frequent
+  than fact→user joins in analytical queries. Optimising the hottest path wins overall.
+- Alternative considered: DISTKEY(userid) on fact.sales — would make user joins node-local
+  but break the much more frequent fact→event join. Rejected.
 
 **DISTSTYLE ALL on dim.date:**
 - Only 365-1000 rows
