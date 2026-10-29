@@ -27,7 +27,6 @@ Transformations:
 Trigger: Called by Step Functions
 """
 
-import sys
 import boto3
 import pandas as pd
 import io

@@ -23,7 +23,6 @@ Transformations:
 Trigger: Called by Step Functions
 """
 
-import sys
 import boto3
 import pandas as pd
 import io
@@ -52,8 +51,6 @@ BOOL_COLUMNS = [
     "likeclassical", "likeopera", "likerock", "likevegas",
     "likebroadway", "likemusicals",
 ]
-
-DTYPE_MAP = {col: str for col in COLUMNS}
 
 s3_client = boto3.client("s3", region_name="us-east-1")
 

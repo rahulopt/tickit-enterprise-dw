@@ -100,10 +100,9 @@ The warehouse supports analyses such as revenue by venue and event category, hig
 
 ```text
 README.md
-BUGFIX_REPORT.md
 docs/
   VERIFIED_METRICS.md          # measured evidence and limitations
-  architecture.md
+  architecture.md             # current design and implementation limits
 lambda/
 glue/
   users_etl.py
