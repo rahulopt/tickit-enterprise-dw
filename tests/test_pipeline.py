@@ -107,7 +107,7 @@ def test_venue_upload_failure_does_not_clear_silver(fake_parquet):
 def test_events_lookup_duplicate_does_not_multiply_event_rows(fake_parquet):
     module = load("glue/events_etl.py")
     module.s3_client = FakeS3({
-        "bronze/event.csv": b"eventid,venueid,catid,dateid,eventname,starttime\n11,1,2,1,Concert,2008-01-01 20:00:00\n",
+        "bronze/event.csv": b"eventid,venueid,catid,dateid,eventname,starttime\n11,1,2,1827,Concert,2008-01-01 20:00:00\n",
         "bronze/venue.csv": b"venueid,venuename,venuecity,venuestate,venueseats\n1,Old,Miami,FL,80\n1,New,Miami,FL,100\n",
         "bronze/category.csv": b"catid,catgroup,catname,catdesc\n2,Shows,Rock,Description\n",
     })
@@ -175,12 +175,20 @@ def test_trigger_non_notification_and_test_event():
 
 
 def test_sql_calendar_generates_all_dates_and_source_keys():
+    from datetime import date, timedelta
     text = (ROOT / "sql/05_load_dim_date.sql").read_text()
     assert "CROSS JOIN digits d3" in text
-    assert "DATEDIFF(day, '2008-01-01'::DATE, d) + 1" in text
-    days = [1000 * a + 100 * b + 10 * c + d for a in range(10) for b in range(10)
-            for c in range(10) for d in range(10) if 1000*a + 100*b + 10*c + d <= 1095]
-    assert sorted(days) == list(range(1096))
+    assert "'2003-01-01'::DATE" in text
+    assert "n + 1 AS dateid" in text
+    assert "n BETWEEN 1826 AND 4381" in text
+    ids = [1000*a + 100*b + 10*c + d + 1
+           for a in range(10) for b in range(10)
+           for c in range(10) for d in range(10)
+           if 1826 <= 1000*a + 100*b + 10*c + d <= 4381]
+    assert sorted(ids) == list(range(1827, 4383))
+    base = date(2003, 1, 1)
+    assert base + timedelta(days=1827 - 1) == date(2008, 1, 1)
+    assert base + timedelta(days=4382 - 1) == date(2014, 12, 30)
 
 
 def test_sql_staging_is_transaction_safe_and_rejects_missing_refs():
@@ -229,4 +237,4 @@ def test_readme_includes_date_load_before_analytical_views():
 def test_calendar_reruns_preserve_existing_rows():
     text = (ROOT / "sql/05_load_dim_date.sql").read_text()
     assert "TRUNCATE TABLE dim.date" not in text
-    assert "NOT EXISTS (SELECT 1 FROM dim.date existing WHERE existing.caldate = d)" in text
+    assert "WHERE existing.dateid = dates.dateid" in text
