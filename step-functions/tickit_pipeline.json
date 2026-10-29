@@ -1,5 +1,5 @@
 {
-  "Comment": "TICKIT: six parallel Bronze-to-Silver tasks, atomic Redshift staging, dimensions, facts, SNS alerts",
+  "Comment": "TICKIT V2: configurable S3 Bronze-to-Silver ETL and Redshift warehouse",
   "StartAt": "ParallelBronzeToSilver",
   "States": {
     "ParallelBronzeToSilver": {
@@ -12,7 +12,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
-                "FunctionName": "arn:aws:lambda:ap-south-1:519749210589:function:tickit-category-etl",
+                "FunctionName": "{{CATEGORY_LAMBDA_ARN}}",
                 "InvocationType": "RequestResponse"
               },
               "ResultPath": "$.category_result",
@@ -37,7 +37,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
-                "FunctionName": "arn:aws:lambda:ap-south-1:519749210589:function:tickit-venue-etl",
+                "FunctionName": "{{VENUE_LAMBDA_ARN}}",
                 "InvocationType": "RequestResponse"
               },
               "ResultPath": "$.venue_result",
@@ -62,7 +62,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "tickit-users-etl"
+                "JobName": "{{USERS_GLUE_JOB}}"
               },
               "ResultPath": "$.users_result",
               "Retry": [
@@ -86,7 +86,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "tickit-events-etl"
+                "JobName": "{{EVENTS_GLUE_JOB}}"
               },
               "ResultPath": "$.events_result",
               "Retry": [
@@ -110,7 +110,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "tickit-listings-etl"
+                "JobName": "{{LISTINGS_GLUE_JOB}}"
               },
               "ResultPath": "$.listings_result",
               "Retry": [
@@ -134,7 +134,7 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "tickit-sales-etl"
+                "JobName": "{{SALES_GLUE_JOB}}"
               },
               "ResultPath": "$.sales_result",
               "Retry": [
@@ -168,9 +168,9 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
       "Parameters": {
-        "Database": "tickit",
-        "WorkgroupName": "ent-dw-1",
-        "Sql": "CALL sp_load_staging('ent-dw-ticket-sales-519749210589', 'arn:aws:iam::519749210589:role/RedshiftServerlessRole')"
+        "Database": "{{REDSHIFT_DATABASE}}",
+        "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
+        "Sql": "CALL sp_load_staging('{{S3_BUCKET}}', '{{REDSHIFT_COPY_ROLE_ARN}}')"
       },
       "ResultPath": "$.staging_exec",
       "Catch": [
@@ -186,7 +186,7 @@
     },
     "WaitForStaging": {
       "Type": "Wait",
-      "Seconds": 120,
+      "Seconds": "{{WAIT_STAGING_SECONDS}}",
       "Next": "CheckStagingStatus"
     },
     "CheckStagingStatus": {
@@ -244,8 +244,8 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
       "Parameters": {
-        "Database": "tickit",
-        "WorkgroupName": "ent-dw-1",
+        "Database": "{{REDSHIFT_DATABASE}}",
+        "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
         "Sql": "CALL sp_load_dimensions(CURRENT_DATE)"
       },
       "ResultPath": "$.dim_exec",
@@ -262,7 +262,7 @@
     },
     "WaitForDimensions": {
       "Type": "Wait",
-      "Seconds": 60,
+      "Seconds": "{{WAIT_DIMENSIONS_SECONDS}}",
       "Next": "CheckDimensionsStatus"
     },
     "CheckDimensionsStatus": {
@@ -320,8 +320,8 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
       "Parameters": {
-        "Database": "tickit",
-        "WorkgroupName": "ent-dw-1",
+        "Database": "{{REDSHIFT_DATABASE}}",
+        "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
         "Sql": "CALL sp_load_facts(CURRENT_DATE)"
       },
       "ResultPath": "$.fact_exec",
@@ -338,7 +338,7 @@
     },
     "WaitForFacts": {
       "Type": "Wait",
-      "Seconds": 180,
+      "Seconds": "{{WAIT_FACTS_SECONDS}}",
       "Next": "CheckFactsStatus"
     },
     "CheckFactsStatus": {
@@ -396,9 +396,9 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-south-1:519749210589:tickit-etl-notifications",
+        "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline SUCCESS",
-        "Message": "Pipeline completed! All 6 ETL jobs, staging, SCD Type 2 dimensions, and facts loaded successfully."
+        "Message": "TICKIT V2 completed: six ETL branches, Redshift staging, initial/idempotent dimensions and facts. Full SCD Type 2 change tracking is not yet implemented."
       },
       "Next": "PipelineSuccess",
       "Catch": [
@@ -414,7 +414,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-south-1:519749210589:tickit-etl-notifications",
+        "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline FAILED - ETL",
         "Message.$": "States.JsonToString($.error)"
       },
@@ -432,7 +432,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-south-1:519749210589:tickit-etl-notifications",
+        "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline FAILED - Staging",
         "Message.$": "States.JsonToString($.error)"
       },
@@ -450,7 +450,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-south-1:519749210589:tickit-etl-notifications",
+        "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline FAILED - Dimensions",
         "Message.$": "States.JsonToString($.error)"
       },
@@ -468,7 +468,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:ap-south-1:519749210589:tickit-etl-notifications",
+        "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline FAILED - Facts",
         "Message.$": "States.JsonToString($.error)"
       },
@@ -524,5 +524,5 @@
       "Next": "NotifyFactsFailed"
     }
   },
-  "TimeoutSeconds": 10800
+  "TimeoutSeconds": "{{WORKFLOW_TIMEOUT_SECONDS}}"
 }
