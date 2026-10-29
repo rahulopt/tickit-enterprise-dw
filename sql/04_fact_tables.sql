@@ -35,36 +35,11 @@
 -- -------------------------------------------------------------
 DROP TABLE IF EXISTS fact.sales;
 CREATE TABLE fact.sales (
-    -- degenerate dimension (natural key from source)
-    salesid       INTEGER         NOT NULL,
-    -- foreign keys to dimensions
-    event_key     BIGINT          NOT NULL,   -- → dim.event.event_key
-    seller_key    BIGINT          NOT NULL,   -- → dim.users.user_key (seller)
-    buyer_key     BIGINT          NOT NULL,   -- → dim.users.user_key (buyer)
-    dateid        SMALLINT        NOT NULL,   -- → dim.date.dateid
-    -- degenerate dimensions (low cardinality, not worth separate dim)
-    listid        INTEGER,
-    qtysold       SMALLINT,
-    -- measures
-    pricepaid     DECIMAL(8,2),
-    commission    DECIMAL(8,2),
-    saletime      TIMESTAMP,
-    -- audit column
-    load_ts       TIMESTAMP       DEFAULT GETDATE()
-)
-DISTKEY(eventid)       -- co-locate with dim.event for revenue by event queries
-COMPOUND SORTKEY(dateid, eventid);
-
--- Note: eventid used in DISTKEY but not stored as column — 
--- Redshift requires DISTKEY column to be in the table.
--- Corrected version:
-DROP TABLE IF EXISTS fact.sales;
-CREATE TABLE fact.sales (
     salesid       INTEGER         NOT NULL,
     event_key     BIGINT          NOT NULL,
     seller_key    BIGINT          NOT NULL,
     buyer_key     BIGINT          NOT NULL,
-    dateid        SMALLINT        NOT NULL,
+    dateid        INTEGER         NOT NULL,
     eventid       INTEGER         NOT NULL,   -- kept for DISTKEY + joins
     listid        INTEGER,
     qtysold       SMALLINT,
@@ -86,7 +61,7 @@ CREATE TABLE fact.listing (
     listid          INTEGER         NOT NULL,
     event_key       BIGINT          NOT NULL,
     seller_key      BIGINT          NOT NULL,
-    dateid          SMALLINT        NOT NULL,
+    dateid          INTEGER         NOT NULL,
     eventid         INTEGER         NOT NULL,   -- kept for DISTKEY
     numtickets      SMALLINT,
     priceperticket  DECIMAL(8,2),

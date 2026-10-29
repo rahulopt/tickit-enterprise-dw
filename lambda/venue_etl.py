@@ -114,14 +114,7 @@ def lambda_handler(event, context):
 
     except Exception as e:
         logger.error(f"Venue ETL FAILED: {str(e)}", exc_info=True)
-        return {
-            "statusCode": 500,
-            "body": json.dumps({
-                "status": "FAILED",
-                "table": "venue",
-                "error": str(e),
-            }),
-        }
+        raise
 
 
 def _clear_silver_prefix(prefix: str) -> None:

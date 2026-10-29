@@ -39,7 +39,7 @@
 -- -------------------------------------------------------------
 DROP TABLE IF EXISTS dim.date;
 CREATE TABLE dim.date (
-    dateid      SMALLINT        NOT NULL,
+    dateid      INTEGER         NOT NULL,
     caldate     DATE            NOT NULL,
     day         CHAR(3)         NOT NULL,     -- Mon, Tue, ...
     week        SMALLINT        NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE dim.event (
     eventid       INTEGER         NOT NULL,
     venueid       SMALLINT,
     catid         SMALLINT,
-    dateid        SMALLINT,
+    dateid        INTEGER,
     -- event attributes
     eventname     VARCHAR(200),
     starttime     TIMESTAMP,
