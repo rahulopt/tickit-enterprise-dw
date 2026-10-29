@@ -8,19 +8,23 @@
 -- fact.sales (22.5M rows, grows nightly)
 --   DISTKEY(eventid) → The most common analytical query is
 --   "revenue by event/venue". This join between fact.sales and
---   dim.event is the hottest join path. Co-locating both tables
---   on eventid means this join NEVER crosses nodes.
---   Why not sellerid/buyerid? Users are a role-playing dimension
---   requiring 2 joins per query. Eventid is 1 join and is the
---   primary analytics axis (revenue by venue requires eventid→venueid).
---   
+--   dim.event is the hottest join path. Both tables share
+--   DISTKEY(eventid), so this join is node-local (no shuffle).
+--
+--   seller/buyer joins to dim.users are cross-node — dim.users
+--   has DISTKEY(userid) which does not match DISTKEY(eventid).
+--   This is an accepted tradeoff: fact→event is far more frequent
+--   in analytical queries than fact→user joins.
+--   Why not DISTKEY(userid)? Users appear as both seller AND buyer,
+--   requiring 2 joins, and the eventid join pattern dominates.
+--
 --   COMPOUND SORTKEY(dateid, eventid) → Analysts filter by date
 --   range constantly ("last 30 days revenue"). dateid first gives
 --   zone map benefit for time-range filters. eventid second gives
 --   efficient co-sorted scans for event+date queries.
 --
 -- fact.listing (25M rows, grows nightly)
---   DISTKEY(eventid) → Same reasoning. Listings are "what's 
+--   DISTKEY(eventid) → Same reasoning. Listings are "what's
 --   available for event X" — eventid is the natural join key.
 --   COMPOUND SORTKEY(dateid, eventid) → Same time-range pattern.
 -- ============================================================
