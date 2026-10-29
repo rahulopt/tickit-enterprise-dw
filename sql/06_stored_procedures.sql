@@ -37,7 +37,7 @@ DECLARE
     v_s3_base       VARCHAR(300);
     v_copy_options  VARCHAR(200);
 BEGIN
-    v_s3_base      := 's3://' || p_s3_bucket || '/silver/';
+    v_s3_base      := 's3://' || p_s3_bucket || '/tickit-v2/silver/';
     v_copy_options := 'IAM_ROLE ' || QUOTE_LITERAL(p_iam_role_arn) || ' FORMAT AS PARQUET';
 
     RAISE INFO 'sp_load_staging: Starting at %', GETDATE();

@@ -23,12 +23,13 @@ logger.setLevel(logging.INFO)
 
 STATE_MACHINE_ARN = os.getenv(
     "STATE_MACHINE_ARN",
-    "arn:aws:states:ap-south-1:519749210589:stateMachine:tickit-nightly-pipeline",
+    "arn:aws:states:us-east-1:519749210589:stateMachine:tickit-nightly-pipeline-v2",
 )
 EXPECTED_BUCKET = os.getenv("TICKIT_BUCKET", "ent-dw-ticket-sales-519749210589")
 DONE_FILE_KEY = "bronze/.done"
 
-sfn_client = boto3.client("stepfunctions")
+# Use the target ARN region even when this Lambda runs in another region.
+sfn_client = boto3.client("stepfunctions", region_name=STATE_MACHINE_ARN.split(":")[3])
 
 
 def _handle_record(record):

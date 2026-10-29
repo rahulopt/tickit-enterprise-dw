@@ -11,7 +11,7 @@ Transformations:
     - Read CSV from bronze/category.csv
     - Filter null catid rows
     - Cast datatypes properly
-    - Write Parquet to silver/category/
+    - Write Parquet to tickit-v2/silver/category/
     
 Trigger: Called by Step Functions (not event-driven)
 """
@@ -28,7 +28,7 @@ logger.setLevel(logging.INFO)
 
 S3_BUCKET = "ent-dw-ticket-sales-519749210589"
 BRONZE_KEY = "bronze/category.csv"
-SILVER_PREFIX = "silver/category/"
+SILVER_PREFIX = "tickit-v2/silver/category/"
 
 s3_client = boto3.client("s3")
 

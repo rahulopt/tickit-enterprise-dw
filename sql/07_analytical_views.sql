@@ -11,28 +11,15 @@
 --   and category attributes come free with no extra joins
 --   (1 join vs 3 — significant at 22.5M sales rows).
 --
--- SCD Type 2 join pattern:
---   fact.sales stores event_key and seller_key/buyer_key —
---   these are SURROGATE keys pointing to a SPECIFIC historical
---   version of dim.event / dim.users.
---
---   DO NOT add WHERE is_current = TRUE on dim.event joins.
---   Doing so would re-map historical sales to the current event
---   version, breaking point-in-time accuracy (e.g., a sale at
---   an old venue would appear under the venue's new name/city).
---
---   For dim.users in seller/buyer views: same rule applies for
---   historical accuracy. Current views report on current seller
---   profiles (is_current = TRUE) only where explicitly noted.
---
--- Verified result: top venue = Jacobs Inc Arena, Jacksonville
---   with ~$82.5M total revenue.
+-- Surrogate-key joins preserve the dimension version assigned at load time.
+-- Fact loading currently resolves current versions, not historical versions
+-- effective at saletime. These views do not establish point-in-time accuracy.
+-- Business results require independently executed and saved query evidence.
 -- ============================================================
 
 -- 1. Which venues make the most money?
 --    JOIN on event_key (surrogate) — no is_current filter needed.
---    Each fact.sales row already points to the correct dim.event
---    version that was current at time of sale.
+--    Each fact.sales row points to the dim.event version assigned at load time.
 CREATE OR REPLACE VIEW v_venue_performance AS
 SELECT e.venuename, e.venuecity, e.venuestate,
        COUNT(DISTINCT s.salesid) AS total_sales,
@@ -46,7 +33,7 @@ ORDER BY total_revenue DESC;
 
 -- 2. Who are our best sellers?  (role-playing dimension: seller_key → dim.users)
 --    JOIN on user_key (surrogate) — no is_current filter needed.
---    seller_key already points to the dim.users version at time of sale.
+--    seller_key points to the dim.users version assigned at load time.
 CREATE OR REPLACE VIEW v_seller_performance AS
 SELECT u.username,
        u.firstname || ' ' || u.lastname AS seller_name,
@@ -62,7 +49,7 @@ ORDER BY total_revenue DESC;
 
 -- 3. What events sell best?
 --    JOIN on event_key (surrogate) — no is_current filter.
---    Historical accuracy: sale at "old venue name" stays with old venue name.
+--    Reports the event attributes assigned when the fact was loaded.
 CREATE OR REPLACE VIEW v_top_events AS
 SELECT e.eventname, e.catname, e.venuename, e.venuecity,
        COUNT(DISTINCT s.salesid) AS total_sales,
@@ -74,24 +61,25 @@ JOIN dim.event e ON s.event_key = e.event_key
 GROUP BY e.eventname, e.catname, e.venuename, e.venuecity
 ORDER BY total_revenue DESC;
 
--- 4. Revenue trends over time?  (dim.date is DISTSTYLE ALL — zero shuffle)
---    dateid join — dim.date has no SCD, plain lookup.
+-- 4. Revenue by transaction month, using saletime rather than event dateid.
+--    NULL timestamps are excluded because they have no transaction month.
 CREATE OR REPLACE VIEW v_monthly_sales AS
-SELECT d.year,
-       DATE_PART(month, d.caldate)::int AS month_num,
-       d.month                          AS month_name,
+SELECT DATE_PART(year, s.saletime)::smallint AS year,
+       DATE_PART(month, s.saletime)::int AS month_num,
+       TO_CHAR(s.saletime, 'Mon')::char(5) AS month_name,
        COUNT(DISTINCT s.salesid) AS total_sales,
        SUM(s.qtysold)            AS total_tickets_sold,
        SUM(s.pricepaid)          AS total_revenue,
        AVG(s.pricepaid)          AS avg_sale_price
 FROM fact.sales s
-JOIN dim.date d ON s.dateid = d.dateid
-GROUP BY d.year, DATE_PART(month, d.caldate), d.month
-ORDER BY d.year, month_num;
+WHERE s.saletime IS NOT NULL
+GROUP BY DATE_PART(year, s.saletime), DATE_PART(month, s.saletime),
+         TO_CHAR(s.saletime, 'Mon')::char(5)
+ORDER BY year, month_num;
 
 -- 5. Category performance?
 --    JOIN on event_key (surrogate) — no is_current filter.
---    catgroup/catname come from the dim.event version at time of sale.
+--    catgroup/catname come from the dim.event version assigned at load time.
 CREATE OR REPLACE VIEW v_category_performance AS
 SELECT e.catgroup, e.catname,
        COUNT(DISTINCT s.salesid) AS total_sales,

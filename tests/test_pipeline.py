@@ -68,14 +68,14 @@ def test_category_filters_bad_keys_and_preserves_new_output(fake_parquet):
     module = load("lambda/category_etl.py")
     client = FakeS3({
         "bronze/category.csv": b"catid,catgroup,catname,catdesc\n1, shows,Rock,Song\nbad,shows,Old,Wrong\n2,sports,Football,Game\n",
-        "silver/category/stale.parquet": b"OLD",
+        "tickit-v2/silver/category/stale.parquet": b"OLD",
     })
     module.s3_client = client
     result = module.lambda_handler({}, None)
     assert result["statusCode"] == 200
     assert json.loads(result["body"])["rows_written"] == 2
-    assert "silver/category/stale.parquet" not in client.objects
-    assert client.objects["silver/category/category.parquet"] == b"PAR1-stub"
+    assert "tickit-v2/silver/category/stale.parquet" not in client.objects
+    assert client.objects["tickit-v2/silver/category/category.parquet"] == b"PAR1-stub"
     assert list(fake_parquet[0].catid) == [1, 2]
     assert fake_parquet[0].catgroup.tolist() == ["SHOWS", "SPORTS"]
 
@@ -97,11 +97,11 @@ def test_venue_upload_failure_does_not_clear_silver(fake_parquet):
             raise ValueError("storage failure")
     module.s3_client = FailingS3({
         "bronze/venue.csv": b"venueid,venuename,venuecity,venuestate,venueseats\n1,Hall,Austin,TX,100\n",
-        "silver/venue/old.parquet": b"GOOD",
+        "tickit-v2/silver/venue/old.parquet": b"GOOD",
     })
     with pytest.raises(ValueError, match="storage failure"):
         module.lambda_handler({}, None)
-    assert module.s3_client.objects["silver/venue/old.parquet"] == b"GOOD"
+    assert module.s3_client.objects["tickit-v2/silver/venue/old.parquet"] == b"GOOD"
 
 
 def test_events_lookup_duplicate_does_not_multiply_event_rows(fake_parquet):
@@ -201,7 +201,21 @@ def test_sql_staging_is_transaction_safe_and_rejects_missing_refs():
 
 
 def test_workflow_all_references_exist_and_failed_statuses_captured():
-    flow = json.loads((ROOT / "step-functions/tickit_pipeline.json").read_text())
+    renderer = load("tools/tickit_workflow.py")
+    config = json.loads((ROOT / "stepfunctions/config.example.json").read_text())
+    for key in config:
+        if not key.endswith("SECONDS"):
+            config[key] = "test-resource"
+    config.update({
+        "CATEGORY_LAMBDA_ARN": "arn:aws:lambda:us-east-1:123456789012:function:category",
+        "VENUE_LAMBDA_ARN": "arn:aws:lambda:us-east-1:123456789012:function:venue",
+        "REDSHIFT_COPY_ROLE_ARN": "arn:aws:iam::123456789012:role/redshift",
+        "SNS_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:notifications",
+        "S3_BUCKET": "test-tickit-bucket",
+    })
+    flow = renderer.render(
+        json.loads((ROOT / "step-functions/tickit_pipeline.json").read_text()), config
+    )
     assert flow["TimeoutSeconds"] > 0
     states = flow["States"]
     def validate_graph(graph):
@@ -238,3 +252,20 @@ def test_calendar_reruns_preserve_existing_rows():
     text = (ROOT / "sql/05_load_dim_date.sql").read_text()
     assert "TRUNCATE TABLE dim.date" not in text
     assert "WHERE existing.dateid = dates.dateid" in text
+
+
+def test_v2_staging_reads_the_etl_output_prefix():
+    text = (ROOT / "sql/06_stored_procedures.sql").read_text()
+    assert "p_s3_bucket || '/tickit-v2/silver/'" in text
+    for name in ("category", "venue"):
+        module = load(f"lambda/{name}_etl.py")
+        assert module.SILVER_PREFIX == f"tickit-v2/silver/{name}/"
+
+
+def test_monthly_sales_uses_transaction_time():
+    text = (ROOT / "sql/07_analytical_views.sql").read_text()
+    view = text.split("CREATE OR REPLACE VIEW v_monthly_sales AS", 1)[1].split(";", 1)[0]
+    assert "DATE_PART(year, s.saletime)" in view
+    assert "DATE_PART(month, s.saletime)" in view
+    assert "s.saletime IS NOT NULL" in view
+    assert "dateid" not in view

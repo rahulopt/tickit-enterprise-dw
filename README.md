@@ -164,23 +164,6 @@ The Step Functions workflow does not currently initialize `dim.date`.
 The V2 warehouse was initialized manually before loading dimensions
 and facts. Full SCD Type 2 change tracking remains future work.
 
-## Redshift V2 SQL Initialization
-
-The date dimension is initialized separately before analytical
-queries that depend on source date IDs.
-
-1. `sql/05_load_dim_date.sql` populates `dim.date` using the source
-   date-ID mapping: IDs 1827–4382, covering 2008-01-01 to 2014-12-30.
-   The verified deployment contains 2,556 date records.
-
-2. `sql/06_stored_procedures.sql` is a repository SQL reference.
-   Before using it for redeployment, reconcile its definitions with
-   the currently deployed V2 stored procedures.
-
-The Step Functions workflow does not currently initialize `dim.date`.
-The V2 warehouse was initialized manually before loading dimensions
-and facts. Full SCD Type 2 change tracking remains future work.
-
 ### Analytical Views
 
 3. `sql/07_analytical_views.sql` contains the repository's analytical

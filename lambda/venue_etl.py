@@ -11,7 +11,7 @@ Transformations:
     - Filter null venueid rows
     - State code validation and cleaning
     - Null venueseats handling (0 for outdoor venues)
-    - Write Parquet to silver/venue/
+    - Write Parquet to tickit-v2/silver/venue/
 
 Trigger: Called by Step Functions
 """
@@ -28,7 +28,7 @@ logger.setLevel(logging.INFO)
 
 S3_BUCKET = "ent-dw-ticket-sales-519749210589"
 BRONZE_KEY = "bronze/venue.csv"
-SILVER_PREFIX = "silver/venue/"
+SILVER_PREFIX = "tickit-v2/silver/venue/"
 
 s3_client = boto3.client("s3")
 
