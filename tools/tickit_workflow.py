@@ -4,6 +4,7 @@ No AWS calls; capture AWS state definition separately with aws CLI.
 """
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def extract(state_machine):
                   for b in a["ParallelBronzeToSilver"]["Branches"]}
     params = a["LoadStaging"]["Parameters"]
     sql = params["Sql"]
-    match = re.fullmatch(r"CALL (?:public\.)?sp_load_staging\('([^']+)', '([^']+)'\)", sql)
+    match = re.fullmatch(r"CALL (?:public\.)?sp_load_(?:staging|warehouse)\('([^']+)', '([^']+)'(?:, CAST\(:load_date AS DATE\))?\)", sql)
     if not match:
         raise ValueError("Unrecognized staging CALL signature; review current SQL manually")
     return {
@@ -37,8 +38,8 @@ def extract(state_machine):
         "REDSHIFT_COPY_ROLE_ARN": match.group(2),
         "SNS_TOPIC_ARN": a["NotifySuccess"]["Parameters"]["TopicArn"],
         "WAIT_STAGING_SECONDS": a["WaitForStaging"]["Seconds"],
-        "WAIT_DIMENSIONS_SECONDS": a["WaitForDimensions"]["Seconds"],
-        "WAIT_FACTS_SECONDS": a["WaitForFacts"]["Seconds"],
+        "WAIT_DIMENSIONS_SECONDS": a.get("WaitForDimensions", {"Seconds": 5})["Seconds"],
+        "WAIT_FACTS_SECONDS": a.get("WaitForFacts", {"Seconds": 5})["Seconds"],
         "WORKFLOW_TIMEOUT_SECONDS": state_machine["TimeoutSeconds"],
     }
 
@@ -96,6 +97,13 @@ def render(template, config):
     return rendered
 
 
+def render_permissions(template, database_user):
+    # Database identifiers are quoted in the template; reject quotes and SQL syntax.
+    if not isinstance(database_user, str) or not re.fullmatch(r"[A-Za-z0-9_:+=,.@/-]{1,128}", database_user) or "REPLACE_WITH" in database_user:
+        raise ValueError("Supply the actual workflow database identity (for example IAMR:<role-name>)")
+    return template.replace("{{WORKFLOW_DB_USER}}", database_user)
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="action", required=True)
@@ -106,6 +114,10 @@ def main():
     r.add_argument("--template", type=Path, default=Path("stepfunctions/tickit_pipeline_v2.template.json"))
     r.add_argument("--config", type=Path, default=Path("stepfunctions/config.local.json"))
     r.add_argument("--out", type=Path, default=Path("stepfunctions/tickit_pipeline_v2.rendered.json"))
+    permissions = sub.add_parser("render-permissions", help="Render SQL grants for a configured workflow database user")
+    permissions.add_argument("--db-user", default=os.environ.get("TICKIT_WORKFLOW_DB_USER"))
+    permissions.add_argument("--template", type=Path, default=Path("sql/08_workflow_permissions.sql"))
+    permissions.add_argument("--out", type=Path, default=Path("sql/08_workflow_permissions.rendered.sql"))
     args = p.parse_args()
     if args.action == "extract":
         definition = json.loads(args.definition.read_text())
@@ -114,6 +126,10 @@ def main():
         args.out.write_text(json.dumps(config, indent=2) + "\n")
         args.out.chmod(0o600)
         print(f"Saved private config to {args.out} (excluded from git)")
+    elif args.action == "render-permissions":
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(render_permissions(args.template.read_text(), args.db_user))
+        print(f"Rendered {args.out}; apply after deploying the stored procedures")
     else:
         cfg = json.loads(args.config.read_text())
         tpl = json.loads(args.template.read_text())

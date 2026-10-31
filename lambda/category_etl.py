@@ -20,13 +20,14 @@ import json
 import boto3
 import pandas as pd
 import io
+import os
 import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-S3_BUCKET = "ent-dw-ticket-sales-519749210589"
+S3_BUCKET = os.environ["TICKIT_BUCKET"]
 BRONZE_KEY = "bronze/category.csv"
 SILVER_PREFIX = "tickit-v2/silver/category/"
 

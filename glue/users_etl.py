@@ -26,6 +26,8 @@ Trigger: Called by Step Functions
 import boto3
 import pandas as pd
 import io
+import os
+import argparse
 import logging
 from datetime import datetime, timezone
 
@@ -33,7 +35,13 @@ from datetime import datetime, timezone
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-S3_BUCKET = "ent-dw-ticket-sales-519749210589"
+# Glue Python Shell accepts job arguments; local runs may use the environment.
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--TICKIT_BUCKET", default=os.environ.get("TICKIT_BUCKET"))
+_runtime_args, _ = _parser.parse_known_args()
+S3_BUCKET = _runtime_args.TICKIT_BUCKET
+if not S3_BUCKET:
+    raise ValueError("Set TICKIT_BUCKET or pass --TICKIT_BUCKET")
 BRONZE_KEY = "bronze/users.csv"
 SILVER_PREFIX = "tickit-v2/silver/users/"
 
@@ -52,7 +60,7 @@ BOOL_COLUMNS = [
     "likebroadway", "likemusicals",
 ]
 
-s3_client = boto3.client("s3", region_name="us-east-1")
+s3_client = boto3.client("s3")
 
 def main():
     logger.info("=" * 60)

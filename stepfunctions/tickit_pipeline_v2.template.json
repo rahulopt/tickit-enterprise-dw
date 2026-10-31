@@ -1,6 +1,6 @@
 {
   "Comment": "TICKIT V2: configurable S3 Bronze-to-Silver ETL and Redshift warehouse",
-  "StartAt": "ParallelBronzeToSilver",
+  "StartAt": "ValidateLoadDate",
   "States": {
     "ParallelBronzeToSilver": {
       "Type": "Parallel",
@@ -62,7 +62,10 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "{{USERS_GLUE_JOB}}"
+                "JobName": "{{USERS_GLUE_JOB}}",
+                "Arguments": {
+                  "--TICKIT_BUCKET": "{{S3_BUCKET}}"
+                }
               },
               "ResultPath": "$.users_result",
               "Retry": [
@@ -86,7 +89,10 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "{{EVENTS_GLUE_JOB}}"
+                "JobName": "{{EVENTS_GLUE_JOB}}",
+                "Arguments": {
+                  "--TICKIT_BUCKET": "{{S3_BUCKET}}"
+                }
               },
               "ResultPath": "$.events_result",
               "Retry": [
@@ -110,7 +116,10 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "{{LISTINGS_GLUE_JOB}}"
+                "JobName": "{{LISTINGS_GLUE_JOB}}",
+                "Arguments": {
+                  "--TICKIT_BUCKET": "{{S3_BUCKET}}"
+                }
               },
               "ResultPath": "$.listings_result",
               "Retry": [
@@ -134,7 +143,10 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
-                "JobName": "{{SALES_GLUE_JOB}}"
+                "JobName": "{{SALES_GLUE_JOB}}",
+                "Arguments": {
+                  "--TICKIT_BUCKET": "{{S3_BUCKET}}"
+                }
               },
               "ResultPath": "$.sales_result",
               "Retry": [
@@ -170,7 +182,13 @@
       "Parameters": {
         "Database": "{{REDSHIFT_DATABASE}}",
         "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
-        "Sql": "CALL sp_load_staging('{{S3_BUCKET}}', '{{REDSHIFT_COPY_ROLE_ARN}}')"
+        "Sql": "CALL sp_load_warehouse('{{S3_BUCKET}}', '{{REDSHIFT_COPY_ROLE_ARN}}', CAST(:load_date AS DATE))",
+        "Parameters": [
+          {
+            "Name": "load_date",
+            "Value.$": "$.load_date"
+          }
+        ]
       },
       "ResultPath": "$.staging_exec",
       "Catch": [
@@ -225,7 +243,7 @@
         {
           "Variable": "$.staging_status.Status",
           "StringEquals": "FINISHED",
-          "Next": "LoadDimensions"
+          "Next": "NotifySuccess"
         },
         {
           "Variable": "$.staging_status.Status",
@@ -240,165 +258,13 @@
       ],
       "Default": "WaitForStaging"
     },
-    "LoadDimensions": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
-      "Parameters": {
-        "Database": "{{REDSHIFT_DATABASE}}",
-        "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
-        "Sql": "CALL sp_load_dimensions(CURRENT_DATE)"
-      },
-      "ResultPath": "$.dim_exec",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "NotifyDimensionsFailed"
-        }
-      ],
-      "Next": "WaitForDimensions"
-    },
-    "WaitForDimensions": {
-      "Type": "Wait",
-      "Seconds": "{{WAIT_DIMENSIONS_SECONDS}}",
-      "Next": "CheckDimensionsStatus"
-    },
-    "CheckDimensionsStatus": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:describeStatement",
-      "Parameters": {
-        "Id.$": "$.dim_exec.Id"
-      },
-      "ResultPath": "$.dim_status",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "NotifyDimensionsFailed"
-        }
-      ],
-      "Next": "IsDimensionsDone",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "RedshiftData.ThrottlingException",
-            "RedshiftData.InternalServerException",
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ]
-    },
-    "IsDimensionsDone": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.dim_status.Status",
-          "StringEquals": "FINISHED",
-          "Next": "LoadFacts"
-        },
-        {
-          "Variable": "$.dim_status.Status",
-          "StringEquals": "FAILED",
-          "Next": "CaptureDimensionsFailure"
-        },
-        {
-          "Variable": "$.dim_status.Status",
-          "StringEquals": "ABORTED",
-          "Next": "CaptureDimensionsFailure"
-        }
-      ],
-      "Default": "WaitForDimensions"
-    },
-    "LoadFacts": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:executeStatement",
-      "Parameters": {
-        "Database": "{{REDSHIFT_DATABASE}}",
-        "WorkgroupName": "{{REDSHIFT_WORKGROUP}}",
-        "Sql": "CALL sp_load_facts(CURRENT_DATE)"
-      },
-      "ResultPath": "$.fact_exec",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "NotifyFactsFailed"
-        }
-      ],
-      "Next": "WaitForFacts"
-    },
-    "WaitForFacts": {
-      "Type": "Wait",
-      "Seconds": "{{WAIT_FACTS_SECONDS}}",
-      "Next": "CheckFactsStatus"
-    },
-    "CheckFactsStatus": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:redshiftdata:describeStatement",
-      "Parameters": {
-        "Id.$": "$.fact_exec.Id"
-      },
-      "ResultPath": "$.fact_status",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "ResultPath": "$.error",
-          "Next": "NotifyFactsFailed"
-        }
-      ],
-      "Next": "IsFactsDone",
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "RedshiftData.ThrottlingException",
-            "RedshiftData.InternalServerException",
-            "States.TaskFailed"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ]
-    },
-    "IsFactsDone": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.fact_status.Status",
-          "StringEquals": "FINISHED",
-          "Next": "NotifySuccess"
-        },
-        {
-          "Variable": "$.fact_status.Status",
-          "StringEquals": "FAILED",
-          "Next": "CaptureFactsFailure"
-        },
-        {
-          "Variable": "$.fact_status.Status",
-          "StringEquals": "ABORTED",
-          "Next": "CaptureFactsFailure"
-        }
-      ],
-      "Default": "WaitForFacts"
-    },
     "NotifySuccess": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "{{SNS_TOPIC_ARN}}",
         "Subject": "TICKIT Pipeline SUCCESS",
-        "Message": "TICKIT V2 completed: six ETL branches, Redshift staging, initial/idempotent dimensions and facts. Full SCD Type 2 change tracking is not yet implemented."
+        "Message": "TICKIT V2 completed: six ETL branches and atomic staging, daily SCD2 dimensions, and point-in-time facts."
       },
       "Next": "PipelineSuccess",
       "Catch": [
@@ -433,43 +299,7 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "{{SNS_TOPIC_ARN}}",
-        "Subject": "TICKIT Pipeline FAILED - Staging",
-        "Message.$": "States.JsonToString($.error)"
-      },
-      "Next": "PipelineFailed",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "PipelineFailed"
-        }
-      ]
-    },
-    "NotifyDimensionsFailed": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "{{SNS_TOPIC_ARN}}",
-        "Subject": "TICKIT Pipeline FAILED - Dimensions",
-        "Message.$": "States.JsonToString($.error)"
-      },
-      "Next": "PipelineFailed",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "PipelineFailed"
-        }
-      ]
-    },
-    "NotifyFactsFailed": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "{{SNS_TOPIC_ARN}}",
-        "Subject": "TICKIT Pipeline FAILED - Facts",
+        "Subject": "TICKIT Pipeline FAILED - Warehouse",
         "Message.$": "States.JsonToString($.error)"
       },
       "Next": "PipelineFailed",
@@ -494,34 +324,36 @@
       "Type": "Pass",
       "Parameters": {
         "Error": "RedshiftStatementFailed",
-        "stage": "staging",
+        "stage": "warehouse",
         "status.$": "$.staging_status.Status",
         "statement_id.$": "$.staging_exec.Id"
       },
       "ResultPath": "$.error",
       "Next": "NotifyStagingFailed"
     },
-    "CaptureDimensionsFailure": {
-      "Type": "Pass",
-      "Parameters": {
-        "Error": "RedshiftStatementFailed",
-        "stage": "dimensions",
-        "status.$": "$.dim_status.Status",
-        "statement_id.$": "$.dim_exec.Id"
-      },
-      "ResultPath": "$.error",
-      "Next": "NotifyDimensionsFailed"
+    "ValidateLoadDate": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.load_date",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.load_date",
+              "IsString": true
+            }
+          ],
+          "Next": "ParallelBronzeToSilver"
+        }
+      ],
+      "Default": "InvalidLoadDate"
     },
-    "CaptureFactsFailure": {
-      "Type": "Pass",
-      "Parameters": {
-        "Error": "RedshiftStatementFailed",
-        "stage": "facts",
-        "status.$": "$.fact_status.Status",
-        "statement_id.$": "$.fact_exec.Id"
-      },
-      "ResultPath": "$.error",
-      "Next": "NotifyFactsFailed"
+    "InvalidLoadDate": {
+      "Type": "Fail",
+      "Error": "InvalidLoadDate",
+      "Cause": "Supply load_date as YYYY-MM-DD for the source snapshot."
     }
   },
   "TimeoutSeconds": "{{WORKFLOW_TIMEOUT_SECONDS}}"

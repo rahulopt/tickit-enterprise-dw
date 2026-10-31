@@ -18,13 +18,13 @@ The recorded Events job used 1 DPU; the recorded Listings job used ten G.1X work
 
 `stepfunctions/tickit_pipeline_v2.template.json` is the single workflow source. [Configuration instructions](STEP_FUNCTIONS_PARAMETERIZATION.md) describe rendering resource identifiers and wait times into a deployment definition.
 
-The workflow runs six ETL branches in parallel. Lambda tasks wait for invocation responses; Glue tasks use `glue:startJobRun.sync`. Once all branches complete, Redshift Data API calls load staging, dimensions, and facts in sequence. Each statement is polled: `FINISHED` advances, `FAILED` or `ABORTED` captures an error, and other statuses continue polling. SNS reports success or failure; the workflow has an overall timeout.
+The workflow runs six ETL branches in parallel. Lambda tasks wait for invocation responses; Glue tasks use `glue:startJobRun.sync`. Once all branches complete, One Redshift Data API call loads staging, dimensions, and facts atomically. The statement is polled: `FINISHED` advances, `FAILED` or `ABORTED` captures an error, and other statuses continue polling. SNS reports success or failure; the workflow has an overall timeout.
 
 The graph below is an older visualization of the broad flow. It omits the current error-capture states, and its green execution markers are not evidence of a successful V2 run. The JSON template is authoritative.
 
 ![Earlier Step Functions graph showing parallel ETL followed by warehouse loads](images/stepfunctions_graph.png)
 
-A successful full V2 execution and schedule/trigger integration have not been verified. `lambda/s3_trigger.py` accepts the exact `bronze/.done` marker and uses a stable daily execution name. Its overlap check skips a marker while another execution runs; it does not queue that delivery for replay.
+A warehouse-only Step Functions execution using the existing production Silver files was verified on 31 October 2026. A successful complete six-branch ETL execution and schedule/trigger integration have not been verified. `lambda/s3_trigger.py` accepts the exact `bronze/.done` marker and uses a stable daily execution name. Its overlap check skips a marker while another execution runs; it does not queue that delivery for replay.
 
 ## Warehouse model and loading
 
@@ -34,13 +34,13 @@ Staging has six source-aligned tables. The repository staging procedure uses `DE
 
 The date loader separately initializes 2,556 event-calendar records: source keys 1827–4382 map to 2008-01-01 through 2014-12-30. The workflow does not initialize this table. Source `dateid` describes the event date; transaction trends use `saletime` or `listtime`. The monthly sales view groups on `saletime`.
 
-The fact procedure resolves current dimension versions and skips natural keys already loaded with `NOT EXISTS`. This supports sequential reruns; it does not guarantee uniqueness across concurrent writers or update previously loaded transactions.
+The repository fact procedure resolves dimensions using transaction-date half-open intervals and skips already loaded fact IDs. Locks serialize warehouse mutations; the workflow calls a single atomic wrapper so staging cannot change between dimension and fact processing.
 
 ## Dimension history and deployment differences
 
-User and event dimensions have `effective_date`, `expiry_date`, and `is_current` columns. The repository dimension procedure contains daily SCD2 change detection, while the last verified deployed procedure only inserted keys lacking a current row. Reconcile these definitions before redeployment or claiming automatic history tracking.
+Repository loaders implement daily SCD2 history, validate contiguous non-overlapping intervals and exactly one current row, and reject conflicting same-day or backdated snapshots. Source absence does not imply deletion. [SCD2 instructions](SCD2.md) describe daily snapshot semantics, historical bootstrap, migration, and tests.
 
-The fact loader uses current dimension versions rather than point-in-time lookups. A surrogate key therefore preserves the version assigned at load time, which may differ from the version effective at a historical transaction timestamp. Same-day changes and historical reprocessing need additional temporal design.
+The daily SCD2 procedures and workflow were deployed on 31 October 2026. Read-back procedure bodies match the repository. Native fixtures verified change tracking, temporal joins and rollback, and a warehouse-only execution against the existing production Silver files preserved all counts. See the [deployment evidence](SCD2_DEPLOYMENT_2026-10-31.md). Existing pre-baseline surrogate assignments are preserved; correcting already-loaded historical facts requires a separate reconciliation against authoritative history.
 
 ## Physical layout
 
@@ -54,4 +54,4 @@ The repository DDL includes destructive table recreation and is intended for ini
 
 The workflow needs permissions for its configured Lambda functions, Glue jobs, Redshift Data API calls, and SNS topic. ETL needs access to its Bronze and Silver objects, and Redshift needs read access for COPY. The repository does not establish a complete reproducible IAM deployment.
 
-Offline tests check transformations, trigger handling, SQL safeguards, template rendering, and workflow references. They do not execute Spark jobs or Redshift SQL and do not verify live AWS integration.
+Offline tests check transformations, trigger handling, SQL safeguards, template rendering, and workflow references. Separate native Redshift and warehouse-only Step Functions checks are recorded in the deployment evidence. Spark execution, the complete six-branch ETL workflow, SNS, and trigger/schedule integration were not exercised by those checks.

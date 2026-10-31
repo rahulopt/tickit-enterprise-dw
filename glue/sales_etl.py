@@ -46,15 +46,13 @@ logging.basicConfig(format=MSG_FORMAT)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ── Constants ───────────────────────────────────────────────────
-S3_BUCKET = "ent-dw-ticket-sales-519749210589"
-BRONZE_PATH = f"s3://{S3_BUCKET}/bronze/sales.csv"
-SILVER_PATH = f"s3://{S3_BUCKET}/tickit-v2/silver/sales/"
-
 
 def main():
     # ── Glue Context Setup ──────────────────────────────────────
-    args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+    args = getResolvedOptions(sys.argv, ["JOB_NAME", "TICKIT_BUCKET"])
+    s3_bucket = args["TICKIT_BUCKET"]
+    bronze_path = f"s3://{s3_bucket}/bronze/sales.csv"
+    silver_path = f"s3://{s3_bucket}/tickit-v2/silver/sales/"
     sc = SparkContext()
     glueContext = GlueContext(sc)
     spark = glueContext.spark_session
@@ -63,7 +61,7 @@ def main():
 
     logger.info("=" * 60)
     logger.info("Starting sales ETL: Bronze CSV → Silver Parquet")
-    logger.info(f"Source: {BRONZE_PATH}")
+    logger.info(f"Source: {bronze_path}")
     start_time = datetime.utcnow()
 
     # ── Step 1: Define Schema ────────────────────────────────────
@@ -83,7 +81,7 @@ def main():
     # ── Step 2: Read from Bronze ─────────────────────────────────
     logger.info("Reading Bronze CSV with explicit schema...")
     df = spark.read.csv(
-        BRONZE_PATH,
+        bronze_path,
         schema=sales_schema,
         header=True,
         nullValue="",
@@ -130,12 +128,12 @@ def main():
     logger.info(f"After transforms: {final_count:,} clean rows")
 
     # ── Step 4: Write to Silver ──────────────────────────────────
-    logger.info(f"Writing Parquet to {SILVER_PATH}")
+    logger.info(f"Writing Parquet to {silver_path}")
     (
         df.repartition(10)
         .write
         .mode("overwrite")
-        .parquet(SILVER_PATH, compression="snappy")
+        .parquet(silver_path, compression="snappy")
     )
 
     duration = (datetime.utcnow() - start_time).total_seconds()

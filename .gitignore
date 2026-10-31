@@ -59,3 +59,12 @@ cdk.out/
 /stepfunctions/*.rendered.json
 /stepfunctions/*live*.json
 /stepfunctions/*.local.json
+
+# Local deployment backups and verification evidence
+/deployment-backups/
+
+# Runtime environment, rendered SQL, local test caches
+.env.*
+!.env.example
+/sql/*.rendered.sql
+.pytest_cache/

@@ -16,6 +16,8 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
+os.environ["TICKIT_BUCKET"] = "test-tickit-bucket"
+os.environ["STATE_MACHINE_ARN"] = "arn:aws:states:us-east-1:123456789012:stateMachine:test-pipeline"
 
 
 def load(filename):
@@ -134,7 +136,7 @@ class FakeSFN:
 
 def done_event(key="bronze/.done", when="2026-10-29T01:00:00.000Z"):
     return {"Records": [{"eventTime": when, "s3": {
-        "bucket": {"name": "ent-dw-ticket-sales-519749210589"},
+        "bucket": {"name": "test-tickit-bucket"},
         "object": {"key": key, "sequencer": "AB123"},
     }}]}
 
@@ -146,6 +148,9 @@ def test_trigger_stable_execution_name_and_input():
     result = module.lambda_handler(done_event(), None)
     assert json.loads(result["body"])["results"][0]["status"] == "STARTED"
     assert sfn.requests[0]["name"] == "tickit-nightly-2026-10-29"
+    execution_input = json.loads(sfn.requests[0]["input"])
+    assert execution_input["load_date"] == "2026-10-29"
+    assert execution_input["trigger"]["load_date"] == execution_input["load_date"]
     module.lambda_handler(done_event(), None)
     assert sfn.requests[0]["input"] == sfn.requests[1]["input"]
 
@@ -229,7 +234,7 @@ def test_workflow_all_references_exist_and_failed_statuses_captured():
             for entry in state.get("Choices", []) + state.get("Catch", []):
                 assert entry["Next"] in graph, (name, entry)
     validate_graph(states)
-    for stage in ("Staging", "Dimensions", "Facts"):
+    for stage in ("Staging",):
         choices = states[f"Is{stage}Done"]["Choices"]
         assert any(c.get("StringEquals") == "FAILED" and c["Next"] == f"Capture{stage}Failure" for c in choices)
         assert any(c.get("StringEquals") == "ABORTED" for c in choices)

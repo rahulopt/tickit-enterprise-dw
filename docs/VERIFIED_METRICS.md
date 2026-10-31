@@ -1,10 +1,16 @@
 # TICKIT V2 — Verified results and evidence
 
-**As of:** 2026-10-29  
+**Original measurements as of:** 2026-10-29
 **AWS region:** `us-east-1`  
 **Warehouse:** Redshift Serverless, `tickit_v2`
 
 This report records results checked through the AWS CLI, Redshift Data API, and PyArrow during manual V2 validation. These are results from one deployment, not repeatable SLA guarantees or estimates of future performance.
+
+## SCD2 deployment update — 31 October 2026
+
+Daily SCD2 is now deployed. Native tests verified changes, temporal joins, retries, rejection guards and atomic rollback. A warehouse-only Step Functions execution with the real workflow role reloaded the production Silver files in **39.064 seconds** and preserved the original dimension/fact counts. This is not a complete Bronze-to-Gold ETL measurement. Existing 2023–2025 facts still predate the 2026-10-29 dimension baseline; their original assignments were preserved. See the [deployment evidence and remaining scope](SCD2_DEPLOYMENT_2026-10-31.md).
+
+The SCD2 limitations in the original 29 October sections below describe the deployment at that earlier check.
 
 ## Source/Silver/Stage reconciliation
 

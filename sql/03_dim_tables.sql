@@ -55,7 +55,7 @@ SORTKEY(dateid);
 -- dim.users (SCD Type 2)
 -- Surrogate key: user_key (system generated, never reused)
 -- Natural key:   userid
--- SCD tracking:  effective_date, expiry_date, is_current
+-- SCD tracking: daily half-open [effective_date, expiry_date), is_current
 -- -------------------------------------------------------------
 DROP TABLE IF EXISTS dim.users;
 CREATE TABLE dim.users (

@@ -21,11 +21,8 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-STATE_MACHINE_ARN = os.getenv(
-    "STATE_MACHINE_ARN",
-    "arn:aws:states:us-east-1:519749210589:stateMachine:tickit-nightly-pipeline-v2",
-)
-EXPECTED_BUCKET = os.getenv("TICKIT_BUCKET", "ent-dw-ticket-sales-519749210589")
+STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
+EXPECTED_BUCKET = os.environ["TICKIT_BUCKET"]
 DONE_FILE_KEY = "bronze/.done"
 
 # Use the target ARN region even when this Lambda runs in another region.
@@ -61,7 +58,7 @@ def _handle_record(record):
         return {"status": "SKIPPED", "reason": "Pipeline already running"}
 
     execution_input = json.dumps(
-        {"trigger": {
+        {"load_date": load_date, "trigger": {
             "source": "s3_done_file",
             "bucket": bucket,
             "key": key,
