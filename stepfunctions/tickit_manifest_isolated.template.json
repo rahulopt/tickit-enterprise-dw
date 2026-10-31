@@ -1,0 +1,661 @@
+{
+  "Comment": "Isolated manifest integration only; no task releases a lease.",
+  "StartAt": "Validate",
+  "TimeoutSeconds": 900,
+  "States": {
+    "Validate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "{{CONTROLLER_ARN}}",
+        "Payload": {
+          "action": "validate",
+          "request.$": "$"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "Next": "SixBranches",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "SixBranches": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "category",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "category",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "category",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "category failed; watchdog must drain children."
+            }
+          }
+        },
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "venue",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "venue",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "venue",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "venue failed; watchdog must drain children."
+            }
+          }
+        },
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "users",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "users",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "users",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "users failed; watchdog must drain children."
+            }
+          }
+        },
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "event",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "event",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "event",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "event failed; watchdog must drain children."
+            }
+          }
+        },
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "listing",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "listing",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "listing",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "listing failed; watchdog must drain children."
+            }
+          }
+        },
+        {
+          "StartAt": "Identity",
+          "States": {
+            "Identity": {
+              "Type": "Pass",
+              "Parameters": {
+                "request.$": "$",
+                "task_run_id.$": "States.UUID()"
+              },
+              "Next": "Submit"
+            },
+            "Submit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "submit_branch",
+                  "request.$": "$.request",
+                  "dataset": "sales",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "Poll"
+            },
+            "Poll": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "{{CONTROLLER_ARN}}",
+                "Payload": {
+                  "action": "poll_branch",
+                  "request.$": "$.request",
+                  "dataset": "sales",
+                  "task_run_id.$": "$.task_run_id"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "Choose"
+            },
+            "Choose": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "Result"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "Wait"
+                }
+              ],
+              "Default": "Failed"
+            },
+            "Result": {
+              "Type": "Pass",
+              "Parameters": {
+                "dataset": "sales",
+                "descriptor.$": "$.result_envelope.payload.descriptor"
+              },
+              "End": true
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "ETLFailed",
+              "Cause": "sales failed; watchdog must drain children."
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.branches",
+      "Next": "SubmitWarehouse",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "SubmitWarehouse": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "{{CONTROLLER_ARN}}",
+        "Payload": {
+          "action": "submit_warehouse",
+          "request.$": "$",
+          "branches.$": "$.branches"
+        }
+      },
+      "ResultSelector": {
+        "payload.$": "$.Payload"
+      },
+      "ResultPath": "$.result_envelope",
+      "Next": "WarehouseChoice",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "WaitWarehouse": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "PollWarehouse"
+    },
+    "PollWarehouse": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "{{CONTROLLER_ARN}}",
+        "Payload": {
+          "action": "poll_warehouse",
+          "request.$": "$"
+        }
+      },
+      "ResultSelector": {
+        "payload.$": "$.Payload"
+      },
+      "ResultPath": "$.result_envelope",
+      "Next": "WarehouseChoice",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "WarehouseChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.result_envelope.payload.status",
+          "StringEquals": "SUCCEEDED",
+          "Next": "NotifySuccess"
+        },
+        {
+          "Variable": "$.result_envelope.payload.status",
+          "StringEquals": "RUNNING",
+          "Next": "WaitWarehouse"
+        }
+      ],
+      "Default": "NotifyFailure"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "{{SNS_ARN}}",
+        "Subject": "TICKIT isolated SUCCEEDED",
+        "Message.$": "States.JsonToString($)"
+      },
+      "ResultPath": "$.notification",
+      "Next": "Success",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Failed"
+        }
+      ]
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "{{SNS_ARN}}",
+        "Subject": "TICKIT isolated FAILED",
+        "Message.$": "States.JsonToString($)"
+      },
+      "ResultPath": "$.notification",
+      "Next": "Failed",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Failed"
+        }
+      ]
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "IsolatedIntegrationFailed",
+      "Cause": "Retain lease until trusted watchdog drains children."
+    }
+  }
+}

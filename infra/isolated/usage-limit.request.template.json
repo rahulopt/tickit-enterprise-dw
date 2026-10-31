@@ -1,0 +1,7 @@
+{
+  "resourceArn": "{{ISOLATED_WORKGROUP_ARN}}",
+  "usageType": "serverless-compute",
+  "amount": 4,
+  "period": "daily",
+  "breachAction": "deactivate"
+}

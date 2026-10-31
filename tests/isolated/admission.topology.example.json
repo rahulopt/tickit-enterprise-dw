@@ -1,0 +1,46 @@
+{
+  "status": "LOCAL_DESIGN_ONLY_NOT_DEPLOYED",
+  "account": "REPLACE_WITH_SEPARATE_TEST_ACCOUNT",
+  "pipeline_id": "REPLACE_WITH_STABLE_WAREHOUSE_SCOPE",
+  "fifo_queue": {
+    "url": "REPLACE_WITH_TEST_FIFO_QUEUE_URL",
+    "single_message_group_per_warehouse": true,
+    "retention_seconds": 1209600,
+    "visibility_seconds": 60,
+    "auto_ack_lambda_event_source": false
+  },
+  "admission_table": {
+    "name": "REPLACE_WITH_TEST_ADMISSION_TABLE",
+    "partition_key": "pk",
+    "queue_index": "queued-batches",
+    "queue_index_partition_key": "queue_partition",
+    "queue_index_sort_key": "queue_sort",
+    "ttl_on_lease_or_ledger": false,
+    "point_in_time_recovery": true,
+    "worker_delete_item_permission": false
+  },
+  "dispatcher": {
+    "schedule_seconds": 60,
+    "lease_seconds": 120,
+    "initial_start_deadline_seconds": 600,
+    "standard_workflow_only": true,
+    "work_registry_required": true
+  },
+  "s3": {
+    "bucket": "REPLACE_WITH_TEST_BUCKET",
+    "versioning": true,
+    "event_prefix": "tickit-v2/batches/",
+    "event_suffix": "/input-manifest.json",
+    "source_versions_and_checksums_required": true,
+    "conditional_writes_required": true,
+    "worker_deletes_allowed": false
+  },
+  "activation_blockers": [
+    "Explicit approval for isolated AWS resources and execution",
+    "Separate-account IAM and resource-policy audit",
+    "Workflow pre-submission registry wrappers and trusted terminal sealer",
+    "Batch/task-specific ETL arguments and native Spark conditional publication",
+    "Manifest-aware isolated Redshift staging loader",
+    "Native SQS/DynamoDB race, recovery and response-loss verification"
+  ]
+}

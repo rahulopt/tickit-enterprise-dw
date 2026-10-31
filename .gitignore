@@ -68,3 +68,47 @@ cdk.out/
 !.env.example
 /sql/*.rendered.sql
 .pytest_cache/
+
+# Local synthetic acceptance-test artifacts
+/tests/isolated/generated/
+
+# Offline isolated AWS deployment artifacts and target-platform dependencies
+/tests/isolated/build/
+
+# Generated deployment packages, layers and downloaded dependencies
+*.zip
+*.whl
+*.tar.gz
+/layers/
+/artifacts/
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.bak
+
+# Local configuration, secret stores and credential caches
+*.local.json
+*.local.yaml
+*.local.yml
+*.rendered.json
+*.rendered.sql
+.envrc
+.netrc
+.npmrc
+secrets/
+secret*.json
+*.p12
+*.pfx
+*.jks
+
+# Tool caches and test outputs
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/

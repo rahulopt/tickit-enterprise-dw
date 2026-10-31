@@ -62,7 +62,15 @@ BOOL_COLUMNS = [
 
 s3_client = boto3.client("s3")
 
-def main():
+def main(batch_request=None, batch_client=None, batch_fence=None, _manifest_bypass=False):
+    if not _manifest_bypass:
+        from tickit_control.context import job_request
+        request = batch_request if batch_request is not None else job_request()
+        if request is not None:
+            from tickit_control.etl import run_pandas_branch
+            return run_pandas_branch(globals(), 'users', request,
+                                     lambda: main(_manifest_bypass=True), batch_client, batch_fence)
+
     logger.info("=" * 60)
     logger.info("Starting users ETL: Bronze CSV → Silver Parquet")
     logger.info(f"Source: s3://{S3_BUCKET}/{BRONZE_KEY}")

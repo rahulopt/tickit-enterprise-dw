@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SYNTHETIC_TEST_ACCOUNT = '123456789012'
 PATTERNS = {
     'AWS access key': re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'),
     'private key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
@@ -40,8 +41,10 @@ def violations(path, data):
     findings = []
     for label, pattern in PATTERNS.items():
         for match in pattern.finditer(content):
-            # AWS's fictitious example account is allowed in test fixtures only.
-            if label == 'account-specific AWS ARN' and path.startswith('tests/') and match[1] == '123456789012':
+            # AWS reserves 123456789012 as the standard synthetic example ID.
+            # Permit it only in test fixtures; all other account IDs remain blocked.
+            if (label == 'account-specific AWS ARN' and path.startswith('tests/')
+                    and match[1] == SYNTHETIC_TEST_ACCOUNT):
                 continue
             findings.append((content.count('\n', 0, match.start()) + 1, label))
     for match in SECRET_ASSIGNMENT.finditer(content):

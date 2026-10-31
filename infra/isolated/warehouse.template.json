@@ -1,0 +1,236 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "TICKIT ISOLATED ONLY; deploy only after approval",
+  "Parameters": {
+    "TestName": {
+      "Type": "String",
+      "AllowedPattern": "tickit-it-[a-z0-9-]{3,24}"
+    },
+    "ProductionAccountId": {
+      "Type": "String",
+      "AllowedPattern": "[0-9]{12}"
+    }
+  },
+  "Conditions": {
+    "IsolatedAccount": {
+      "Fn::And": [
+        {
+          "Fn::Not": [
+            {
+              "Fn::Equals": [
+                {
+                  "Ref": "AWS::AccountId"
+                },
+                {
+                  "Ref": "ProductionAccountId"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AWS::Region"
+            },
+            "us-east-1"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "CidrBlock": "10.77.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true
+      }
+    },
+    "Subnet0": {
+      "Type": "AWS::EC2::Subnet",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.77.0.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": false
+      }
+    },
+    "Subnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.77.1.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": false
+      }
+    },
+    "Subnet2": {
+      "Type": "AWS::EC2::Subnet",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.77.2.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            2,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": false
+      }
+    },
+    "SecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "GroupDescription": "Isolated warehouse: no inbound network connections",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Service connectivity; no IGW or NAT provisioned"
+          }
+        ]
+      }
+    },
+    "Namespace": {
+      "Type": "AWS::RedshiftServerless::Namespace",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "NamespaceName": {
+          "Fn::Sub": "${TestName}-ns"
+        },
+        "DbName": "tickit_it",
+        "ManageAdminPassword": true,
+        "AdminUsername": "tickit_test_admin",
+        "IamRoles": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-CopyRoleArn"
+            }
+          }
+        ],
+        "DefaultIamRoleArn": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${TestName}-CopyRoleArn"
+          }
+        }
+      }
+    },
+    "Workgroup": {
+      "Type": "AWS::RedshiftServerless::Workgroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "WorkgroupName": {
+          "Fn::Sub": "${TestName}-wg"
+        },
+        "NamespaceName": {
+          "Ref": "Namespace"
+        },
+        "BaseCapacity": 8,
+        "MaxCapacity": 8,
+        "PubliclyAccessible": false,
+        "EnhancedVpcRouting": false,
+        "SubnetIds": [
+          {
+            "Ref": "Subnet0"
+          },
+          {
+            "Ref": "Subnet1"
+          },
+          {
+            "Ref": "Subnet2"
+          }
+        ],
+        "SecurityGroupIds": [
+          {
+            "Ref": "SecurityGroup"
+          }
+        ],
+        "ConfigParameters": [
+          {
+            "ParameterKey": "max_query_execution_time",
+            "ParameterValue": "120"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WorkgroupName": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Fn::Sub": "${TestName}-wg"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-WorkgroupName"
+        }
+      }
+    },
+    "WorkgroupArn": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Fn::GetAtt": [
+          "Workgroup",
+          "Workgroup.WorkgroupArn"
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-WorkgroupArn"
+        }
+      }
+    },
+    "NamespaceName": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Ref": "Namespace"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-NamespaceName"
+        }
+      }
+    },
+    "Database": {
+      "Condition": "IsolatedAccount",
+      "Value": "tickit_it",
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-Database"
+        }
+      }
+    }
+  }
+}

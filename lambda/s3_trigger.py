@@ -1,103 +1,39 @@
-"""Start the nightly Standard Step Functions pipeline for bronze/.done uploads.
+"""Undeployed queued ingress: immutable manifest -> DynamoDB outbox -> SQS FIFO.
 
-Configure the S3 notification for s3:ObjectCreated:* with prefix ``bronze/``
-and suffix ``.done``. This handler independently checks the *exact* key.
-
-The execution name is deliberately stable for a UTC delivery date. This
-prevents concurrent duplicate starts and repeated deliveries of the same S3
-notification. A Standard workflow cannot reuse that name for 90 days; see
-README for intentional reprocessing instructions.
+This local replacement intentionally removes direct Step Functions startup and
+check-then-start skipping. It requires the new manifest contract; do not deploy
+it against legacy bronze/.done notifications. See docs/OVERLAP_PROTECTION.md.
 """
-
 import json
-import logging
 import os
-from datetime import datetime, timezone
-from urllib.parse import unquote_plus
+import time
 
-import boto3
-from botocore.exceptions import ClientError
+from tickit_control.admission import Admission, Dispatcher
+from tickit_control.aws import DynamoStore, SqsQueue
+from tickit_control.ingress import enqueue_s3_event, validate_event
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
-EXPECTED_BUCKET = os.environ["TICKIT_BUCKET"]
-DONE_FILE_KEY = "bronze/.done"
-
-# Use the target ARN region even when this Lambda runs in another region.
-sfn_client = boto3.client("stepfunctions", region_name=STATE_MACHINE_ARN.split(":")[3])
+EXPECTED_BUCKET = os.environ['TICKIT_BUCKET']
 
 
-def _handle_record(record):
-    s3_info = record.get("s3", {})
-    bucket = s3_info.get("bucket", {}).get("name")
-    # S3 event notification object keys are form-url-encoded (spaces become '+').
-    encoded_key = s3_info.get("object", {}).get("key", "")
-    key = unquote_plus(encoded_key)
-
-    if bucket != EXPECTED_BUCKET or key != DONE_FILE_KEY:
-        logger.info("Ignoring S3 object: bucket=%s key=%s", bucket, key)
-        return {"status": "IGNORED", "bucket": bucket, "key": key}
-
-    event_time = record.get("eventTime")
-    if not event_time:
-        raise ValueError("S3 event is missing eventTime; cannot determine delivery date")
-    # eventTime is stable across at-least-once delivery of the same event.
-    delivery_time = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
-    load_date = delivery_time.astimezone(timezone.utc).date().isoformat()
-    execution_name = f"tickit-nightly-{load_date}"
-
-    # Avoid overlapping *different-day* batches which overwrite shared Silver
-    # paths. This is a best-effort pre-check, not an atomic global lock.
-    running = sfn_client.list_executions(
-        stateMachineArn=STATE_MACHINE_ARN, statusFilter="RUNNING", maxResults=10
-    ).get("executions", [])
-    if running:
-        logger.info("Pipeline already running; skipping marker for %s", load_date)
-        return {"status": "SKIPPED", "reason": "Pipeline already running"}
-
-    execution_input = json.dumps(
-        {"load_date": load_date, "trigger": {
-            "source": "s3_done_file",
-            "bucket": bucket,
-            "key": key,
-            "load_date": load_date,
-        }},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-    try:
-        execution = sfn_client.start_execution(
-            stateMachineArn=STATE_MACHINE_ARN,
-            name=execution_name,
-            input=execution_input,
-        )
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "ExecutionAlreadyExists":
-            logger.info("Daily execution already exists: %s", execution_name)
-            return {"status": "SKIPPED", "reason": "Daily execution already exists"}
-        raise
-
-    logger.info("Started %s: %s", execution_name, execution["executionArn"])
-    return {
-        "status": "STARTED",
-        "execution_arn": execution["executionArn"],
-        "load_date": load_date,
-    }
+def _services():
+    # No clients or AWS requests are created at import. Tests inject this factory.
+    import boto3
+    store = DynamoStore(boto3.client('dynamodb'), os.environ['ADMISSION_TABLE'])
+    queue = SqsQueue(boto3.client('sqs'), os.environ['BATCH_QUEUE_URL'])
+    admission = Admission(store, None, time.time, pipeline_id=os.environ['TICKIT_PIPELINE_ID'])
+    dispatcher = Dispatcher(admission, queue)
+    s3 = boto3.client('s3')
+    def load_version(bucket, key, version):
+        return s3.get_object(Bucket=bucket, Key=key, VersionId=version)['Body'].read()
+    return dispatcher, load_version
 
 
 def lambda_handler(event, context):
-    if event.get("Event") == "s3:TestEvent":
-        return {"statusCode": 200, "body": json.dumps({"status": "IGNORED"})}
-
-    records = event.get("Records")
-    if not isinstance(records, list) or not records:
-        logger.error("Expected an S3 notification with nonempty Records list")
-        return {"statusCode": 400, "body": "Invalid S3 notification"}
-
-    outcomes = []
-    for record in records:
-        outcomes.append(_handle_record(record))
-    return {"statusCode": 200, "body": json.dumps({"results": outcomes})}
+    if event.get('Event') == 's3:TestEvent':
+        return {'statusCode': 200, 'body': json.dumps({'status': 'IGNORED'})}
+    if not isinstance(event.get('Records'), list) or not event['Records']:
+        return {'statusCode': 400, 'body': 'Invalid S3 notification'}
+    validate_event(event, EXPECTED_BUCKET)  # Reject legacy/wrong input before SDK use.
+    dispatcher, load_version = _services()
+    results = enqueue_s3_event(event, EXPECTED_BUCKET, load_version, dispatcher)
+    return {'statusCode': 200, 'body': json.dumps({'results': results})}

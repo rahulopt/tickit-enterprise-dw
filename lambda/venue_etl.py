@@ -34,7 +34,12 @@ SILVER_PREFIX = "tickit-v2/silver/venue/"
 s3_client = boto3.client("s3")
 
 
-def lambda_handler(event, context):
+def lambda_handler(event, context, *, batch_client=None, batch_fence=None):
+    if 'batch_id' in event or 'manifest_sha256' in event:
+        from tickit_control.etl import run_pandas_branch
+        return run_pandas_branch(globals(), 'venue', event,
+                                 lambda: lambda_handler({}, context), batch_client, batch_fence)
+
     logger.info("Starting venue ETL: Bronze CSV → Silver Parquet")
     start_time = datetime.now(timezone.utc)
 

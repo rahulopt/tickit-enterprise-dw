@@ -1,0 +1,2304 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "TICKIT ISOLATED ONLY; deploy only after approval",
+  "Parameters": {
+    "TestName": {
+      "Type": "String",
+      "AllowedPattern": "tickit-it-[a-z0-9-]{3,24}"
+    },
+    "ProductionAccountId": {
+      "Type": "String",
+      "AllowedPattern": "[0-9]{12}"
+    }
+  },
+  "Conditions": {
+    "IsolatedAccount": {
+      "Fn::And": [
+        {
+          "Fn::Not": [
+            {
+              "Fn::Equals": [
+                {
+                  "Ref": "AWS::AccountId"
+                },
+                {
+                  "Ref": "ProductionAccountId"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AWS::Region"
+            },
+            "us-east-1"
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "EtlRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${TestName}-EtlRole"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com",
+                  "glue.amazonaws.com"
+                ]
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "isolated-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${TestName}-*:*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${TestName}/glue*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-TableArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/artifacts/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetBucketLocation"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-BucketArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-BucketArn"
+                    }
+                  },
+                  "Condition": {
+                    "StringLike": {
+                      "s3:prefix": [
+                        "tickit-v2/batches/*/attempts/*/scratch/*",
+                        "tickit-v2/batches/*/attempts/*/pinned-inputs/*"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject",
+                    "s3:AbortMultipartUpload",
+                    "s3:ListMultipartUploadParts"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*/attempts/*/silver/*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*/attempts/*/scratch/*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*/attempts/*/pinned-inputs/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        {
+                          "Fn::ImportValue": {
+                            "Fn::Sub": "${TestName}-BucketArn"
+                          }
+                        },
+                        "/tickit-v2/batches/*/attempts/*/scratch/*"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ControllerRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${TestName}-ControllerRole"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "isolated-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${TestName}-*:*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${TestName}/glue*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-TableArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/artifacts/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*/attempts/*/output-manifest.json"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*/attempts/*/warehouse/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "glue:StartJobRun",
+                    "glue:GetJobRun"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-users"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-event"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-listing"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-sales"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TestName}-category"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TestName}-venue"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "redshift-data:ExecuteStatement",
+                    "redshift-serverless:GetCredentials"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-WorkgroupArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "redshift-data:DescribeStatement"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "IngressRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${TestName}-IngressRole"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "isolated-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${TestName}-*:*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${TestName}/glue*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-TableArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/tickit-v2/batches/*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          {
+                            "Fn::ImportValue": {
+                              "Fn::Sub": "${TestName}-BucketArn"
+                            }
+                          },
+                          "/artifacts/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:SendMessage"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-QueueArn"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "DispatcherRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${TestName}-DispatcherRole"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "isolated-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${TestName}-*:*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${TestName}/glue*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-TableArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:Query"
+                  ],
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        {
+                          "Fn::ImportValue": {
+                            "Fn::Sub": "${TestName}-TableArn"
+                          }
+                        },
+                        "/index/queued-batches"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:SendMessage",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-QueueArn"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "states:StartExecution",
+                    "states:DescribeStateMachine"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${TestName}-workflow"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "states:DescribeExecution"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${TestName}-workflow:*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "glue:GetJobRun"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-users"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-event"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-listing"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${TestName}-sales"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "redshift-data:DescribeStatement"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WorkflowRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "${TestName}-WorkflowRole"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "isolated-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TestName}-controller"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sns:Publish"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "${TestName}-TopicArn"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "SdkLayer": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LayerName": {
+          "Fn::Sub": "${TestName}-sdk"
+        },
+        "CompatibleRuntimes": [
+          "python3.11"
+        ],
+        "Content": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/sdk-layer.zip"
+        }
+      }
+    },
+    "DataLayer": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LayerName": {
+          "Fn::Sub": "${TestName}-data"
+        },
+        "CompatibleRuntimes": [
+          "python3.11"
+        ],
+        "Content": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/data-layer.zip"
+        }
+      }
+    },
+    "CategoryFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${TestName}-category"
+        },
+        "Runtime": "python3.11",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "category_etl.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 60,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 6,
+        "Code": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/category.zip"
+        },
+        "Layers": [
+          {
+            "Ref": "SdkLayer"
+          },
+          {
+            "Ref": "DataLayer"
+          }
+        ],
+        "Environment": {
+          "Variables": {
+            "TICKIT_BUCKET": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Bucket"
+              }
+            },
+            "ADMISSION_TABLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Table"
+              }
+            },
+            "BATCH_QUEUE_URL": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-QueueUrl"
+              }
+            },
+            "TICKIT_PIPELINE_ID": {
+              "Ref": "TestName"
+            }
+          }
+        }
+      }
+    },
+    "CategoryLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${TestName}-category"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "VenueFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${TestName}-venue"
+        },
+        "Runtime": "python3.11",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "venue_etl.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 60,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 6,
+        "Code": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/venue.zip"
+        },
+        "Layers": [
+          {
+            "Ref": "SdkLayer"
+          },
+          {
+            "Ref": "DataLayer"
+          }
+        ],
+        "Environment": {
+          "Variables": {
+            "TICKIT_BUCKET": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Bucket"
+              }
+            },
+            "ADMISSION_TABLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Table"
+              }
+            },
+            "BATCH_QUEUE_URL": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-QueueUrl"
+              }
+            },
+            "TICKIT_PIPELINE_ID": {
+              "Ref": "TestName"
+            }
+          }
+        }
+      }
+    },
+    "VenueLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${TestName}-venue"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "ControllerFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${TestName}-controller"
+        },
+        "Runtime": "python3.11",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "isolated_controller.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 120,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 6,
+        "Code": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/controller.zip"
+        },
+        "Layers": [
+          {
+            "Ref": "SdkLayer"
+          }
+        ],
+        "Environment": {
+          "Variables": {
+            "TICKIT_BUCKET": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Bucket"
+              }
+            },
+            "ADMISSION_TABLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Table"
+              }
+            },
+            "BATCH_QUEUE_URL": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-QueueUrl"
+              }
+            },
+            "TICKIT_PIPELINE_ID": {
+              "Ref": "TestName"
+            },
+            "REDSHIFT_WORKGROUP": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-WorkgroupName"
+              }
+            },
+            "REDSHIFT_DATABASE": "tickit_it",
+            "REDSHIFT_COPY_ROLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-CopyRoleArn"
+              }
+            }
+          }
+        }
+      }
+    },
+    "ControllerLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${TestName}-controller"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "IngressFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${TestName}-ingress"
+        },
+        "Runtime": "python3.11",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "s3_trigger.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "IngressRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 30,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 6,
+        "Code": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/ingress.zip"
+        },
+        "Layers": [
+          {
+            "Ref": "SdkLayer"
+          }
+        ],
+        "Environment": {
+          "Variables": {
+            "TICKIT_BUCKET": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Bucket"
+              }
+            },
+            "ADMISSION_TABLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Table"
+              }
+            },
+            "BATCH_QUEUE_URL": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-QueueUrl"
+              }
+            },
+            "TICKIT_PIPELINE_ID": {
+              "Ref": "TestName"
+            }
+          }
+        }
+      }
+    },
+    "IngressLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${TestName}-ingress"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "DispatcherFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${TestName}-dispatcher"
+        },
+        "Runtime": "python3.11",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "batch_dispatcher.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "DispatcherRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 45,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Fn::ImportValue": {
+              "Fn::Sub": "${TestName}-Bucket"
+            }
+          },
+          "S3Key": "artifacts/dispatcher.zip"
+        },
+        "Layers": [
+          {
+            "Ref": "SdkLayer"
+          }
+        ],
+        "Environment": {
+          "Variables": {
+            "TICKIT_BUCKET": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Bucket"
+              }
+            },
+            "ADMISSION_TABLE": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-Table"
+              }
+            },
+            "BATCH_QUEUE_URL": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "${TestName}-QueueUrl"
+              }
+            },
+            "TICKIT_PIPELINE_ID": {
+              "Ref": "TestName"
+            },
+            "STATE_MACHINE_ARN": {
+              "Fn::Sub": "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${TestName}-workflow"
+            }
+          }
+        }
+      }
+    },
+    "DispatcherLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${TestName}-dispatcher"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "GlueErrorLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/${TestName}/glue/error"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "GlueOutputLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/${TestName}/glue/output"
+        },
+        "RetentionInDays": 1
+      }
+    },
+    "UsersJob": {
+      "Type": "AWS::Glue::Job",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${TestName}-users"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "GlueVersion": "5.0",
+        "Command": {
+          "Name": "glueetl",
+          "PythonVersion": "3",
+          "ScriptLocation": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/users_etl.py"
+              ]
+            ]
+          }
+        },
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "Timeout": 5,
+        "MaxRetries": 0,
+        "JobRunQueuingEnabled": false,
+        "ExecutionProperty": {
+          "MaxConcurrentRuns": 1
+        },
+        "DefaultArguments": {
+          "--extra-py-files": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/tickit-control.zip"
+              ]
+            ]
+          },
+          "--additional-python-modules": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/glue-dependencies.gluewheels.zip"
+              ]
+            ]
+          },
+          "--python-modules-installer-option": "--no-index",
+          "--job-bookmark-option": "job-bookmark-disable",
+          "--custom-logGroup-prefix": {
+            "Fn::Sub": "/${TestName}/glue"
+          },
+          "--conf": "spark.sql.session.timeZone=UTC --conf spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS --conf spark.sql.ansi.enabled=true --conf spark.sql.shuffle.partitions=2"
+        }
+      }
+    },
+    "EventJob": {
+      "Type": "AWS::Glue::Job",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${TestName}-event"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "GlueVersion": "5.0",
+        "Command": {
+          "Name": "glueetl",
+          "PythonVersion": "3",
+          "ScriptLocation": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/events_etl.py"
+              ]
+            ]
+          }
+        },
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "Timeout": 5,
+        "MaxRetries": 0,
+        "JobRunQueuingEnabled": false,
+        "ExecutionProperty": {
+          "MaxConcurrentRuns": 1
+        },
+        "DefaultArguments": {
+          "--extra-py-files": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/tickit-control.zip"
+              ]
+            ]
+          },
+          "--additional-python-modules": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/glue-dependencies.gluewheels.zip"
+              ]
+            ]
+          },
+          "--python-modules-installer-option": "--no-index",
+          "--job-bookmark-option": "job-bookmark-disable",
+          "--custom-logGroup-prefix": {
+            "Fn::Sub": "/${TestName}/glue"
+          },
+          "--conf": "spark.sql.session.timeZone=UTC --conf spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS --conf spark.sql.ansi.enabled=true --conf spark.sql.shuffle.partitions=2"
+        }
+      }
+    },
+    "ListingJob": {
+      "Type": "AWS::Glue::Job",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${TestName}-listing"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "GlueVersion": "5.0",
+        "Command": {
+          "Name": "glueetl",
+          "PythonVersion": "3",
+          "ScriptLocation": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/listings_etl.py"
+              ]
+            ]
+          }
+        },
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "Timeout": 5,
+        "MaxRetries": 0,
+        "JobRunQueuingEnabled": false,
+        "ExecutionProperty": {
+          "MaxConcurrentRuns": 1
+        },
+        "DefaultArguments": {
+          "--extra-py-files": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/tickit-control.zip"
+              ]
+            ]
+          },
+          "--additional-python-modules": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/glue-dependencies.gluewheels.zip"
+              ]
+            ]
+          },
+          "--python-modules-installer-option": "--no-index",
+          "--job-bookmark-option": "job-bookmark-disable",
+          "--custom-logGroup-prefix": {
+            "Fn::Sub": "/${TestName}/glue"
+          },
+          "--conf": "spark.sql.session.timeZone=UTC --conf spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS --conf spark.sql.ansi.enabled=true --conf spark.sql.shuffle.partitions=2"
+        }
+      }
+    },
+    "SalesJob": {
+      "Type": "AWS::Glue::Job",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${TestName}-sales"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "EtlRole",
+            "Arn"
+          ]
+        },
+        "GlueVersion": "5.0",
+        "Command": {
+          "Name": "glueetl",
+          "PythonVersion": "3",
+          "ScriptLocation": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/sales_etl.py"
+              ]
+            ]
+          }
+        },
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "Timeout": 5,
+        "MaxRetries": 0,
+        "JobRunQueuingEnabled": false,
+        "ExecutionProperty": {
+          "MaxConcurrentRuns": 1
+        },
+        "DefaultArguments": {
+          "--extra-py-files": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/tickit-control.zip"
+              ]
+            ]
+          },
+          "--additional-python-modules": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-Bucket"
+                  }
+                },
+                "/artifacts/glue-dependencies.gluewheels.zip"
+              ]
+            ]
+          },
+          "--python-modules-installer-option": "--no-index",
+          "--job-bookmark-option": "job-bookmark-disable",
+          "--custom-logGroup-prefix": {
+            "Fn::Sub": "/${TestName}/glue"
+          },
+          "--conf": "spark.sql.session.timeZone=UTC --conf spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS --conf spark.sql.ansi.enabled=true --conf spark.sql.shuffle.partitions=2"
+        }
+      }
+    },
+    "Workflow": {
+      "Type": "AWS::StepFunctions::StateMachine",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "StateMachineName": {
+          "Fn::Sub": "${TestName}-workflow"
+        },
+        "StateMachineType": "STANDARD",
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "WorkflowRole",
+            "Arn"
+          ]
+        },
+        "Definition": {
+          "Comment": "Isolated manifest integration only; no task releases a lease.",
+          "StartAt": "Validate",
+          "TimeoutSeconds": 900,
+          "States": {
+            "Validate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": {
+                  "Fn::GetAtt": [
+                    "ControllerFunction",
+                    "Arn"
+                  ]
+                },
+                "Payload": {
+                  "action": "validate",
+                  "request.$": "$"
+                }
+              },
+              "OutputPath": "$.Payload",
+              "Next": "SixBranches",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "SixBranches": {
+              "Type": "Parallel",
+              "Branches": [
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "category",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "category",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "category",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "category failed; watchdog must drain children."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "venue",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "venue",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "venue",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "venue failed; watchdog must drain children."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "users",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "users",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "users",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "users failed; watchdog must drain children."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "event",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "event",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "event",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "event failed; watchdog must drain children."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "listing",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "listing",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "listing",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "listing failed; watchdog must drain children."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Identity",
+                  "States": {
+                    "Identity": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "request.$": "$",
+                        "task_run_id.$": "States.UUID()"
+                      },
+                      "Next": "Submit"
+                    },
+                    "Submit": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "submit_branch",
+                          "request.$": "$.request",
+                          "dataset": "sales",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Seconds": 10,
+                      "Next": "Poll"
+                    },
+                    "Poll": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": {
+                          "Fn::GetAtt": [
+                            "ControllerFunction",
+                            "Arn"
+                          ]
+                        },
+                        "Payload": {
+                          "action": "poll_branch",
+                          "request.$": "$.request",
+                          "dataset": "sales",
+                          "task_run_id.$": "$.task_run_id"
+                        }
+                      },
+                      "ResultSelector": {
+                        "payload.$": "$.Payload"
+                      },
+                      "ResultPath": "$.result_envelope",
+                      "Next": "Choose"
+                    },
+                    "Choose": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "SUCCEEDED",
+                          "Next": "Result"
+                        },
+                        {
+                          "Variable": "$.result_envelope.payload.status",
+                          "StringEquals": "RUNNING",
+                          "Next": "Wait"
+                        }
+                      ],
+                      "Default": "Failed"
+                    },
+                    "Result": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "dataset": "sales",
+                        "descriptor.$": "$.result_envelope.payload.descriptor"
+                      },
+                      "End": true
+                    },
+                    "Failed": {
+                      "Type": "Fail",
+                      "Error": "ETLFailed",
+                      "Cause": "sales failed; watchdog must drain children."
+                    }
+                  }
+                }
+              ],
+              "ResultPath": "$.branches",
+              "Next": "SubmitWarehouse",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "SubmitWarehouse": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": {
+                  "Fn::GetAtt": [
+                    "ControllerFunction",
+                    "Arn"
+                  ]
+                },
+                "Payload": {
+                  "action": "submit_warehouse",
+                  "request.$": "$",
+                  "branches.$": "$.branches"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "WarehouseChoice",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "WaitWarehouse": {
+              "Type": "Wait",
+              "Seconds": 5,
+              "Next": "PollWarehouse"
+            },
+            "PollWarehouse": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": {
+                  "Fn::GetAtt": [
+                    "ControllerFunction",
+                    "Arn"
+                  ]
+                },
+                "Payload": {
+                  "action": "poll_warehouse",
+                  "request.$": "$"
+                }
+              },
+              "ResultSelector": {
+                "payload.$": "$.Payload"
+              },
+              "ResultPath": "$.result_envelope",
+              "Next": "WarehouseChoice",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.error",
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "WarehouseChoice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "NotifySuccess"
+                },
+                {
+                  "Variable": "$.result_envelope.payload.status",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitWarehouse"
+                }
+              ],
+              "Default": "NotifyFailure"
+            },
+            "NotifySuccess": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-TopicArn"
+                  }
+                },
+                "Subject": "TICKIT isolated SUCCEEDED",
+                "Message.$": "States.JsonToString($)"
+              },
+              "ResultPath": "$.notification",
+              "Next": "Success",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "Failed"
+                }
+              ]
+            },
+            "NotifyFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "${TestName}-TopicArn"
+                  }
+                },
+                "Subject": "TICKIT isolated FAILED",
+                "Message.$": "States.JsonToString($)"
+              },
+              "ResultPath": "$.notification",
+              "Next": "Failed",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "Next": "Failed"
+                }
+              ]
+            },
+            "Success": {
+              "Type": "Succeed"
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Error": "IsolatedIntegrationFailed",
+              "Cause": "Retain lease until trusted watchdog drains children."
+            }
+          }
+        }
+      }
+    },
+    "Watchdog": {
+      "Type": "AWS::Events::Rule",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${TestName}-watchdog"
+        },
+        "ScheduleExpression": "rate(1 minute)",
+        "State": "DISABLED",
+        "Targets": [
+          {
+            "Id": "dispatcher",
+            "Arn": {
+              "Fn::GetAtt": [
+                "DispatcherFunction",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WatchdogPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "DispatcherFunction"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "Watchdog",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "IngressPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "IsolatedAccount",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "IngressFunction"
+        },
+        "Principal": "s3.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::ImportValue": {
+            "Fn::Sub": "${TestName}-BucketArn"
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "WorkflowArn": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Ref": "Workflow"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-WorkflowArn"
+        }
+      }
+    },
+    "ControllerRoleArn": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Fn::GetAtt": [
+          "ControllerRole",
+          "Arn"
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-ControllerRoleArn"
+        }
+      }
+    },
+    "IngressArn": {
+      "Condition": "IsolatedAccount",
+      "Value": {
+        "Fn::GetAtt": [
+          "IngressFunction",
+          "Arn"
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "${TestName}-IngressArn"
+        }
+      }
+    }
+  }
+}

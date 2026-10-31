@@ -29,17 +29,6 @@ import sys
 import logging
 from datetime import datetime
 
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType, StructField,
-    IntegerType, ShortType, DecimalType, TimestampType,
-)
-from pyspark.sql.window import Window
-
 # ── Logging Setup ───────────────────────────────────────────────
 MSG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 logging.basicConfig(format=MSG_FORMAT)
@@ -47,7 +36,25 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def main():
+def main(batch_request=None, batch_client=None, batch_fence=None, spark_runner=None):
+    from tickit_control.context import job_request
+    request = batch_request if batch_request is not None else job_request()
+    if request is not None:
+        from tickit_control.spark_etl import run_spark_branch
+        return (spark_runner or run_spark_branch)('sales', request, batch_client, batch_fence)
+
+    from awsglue.utils import getResolvedOptions
+    from pyspark.context import SparkContext
+    from awsglue.context import GlueContext
+    from awsglue.job import Job
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import (
+        StructType, StructField,
+        IntegerType, ShortType, DecimalType, TimestampType,
+    )
+    from pyspark.sql.window import Window
+
+
     # ── Glue Context Setup ──────────────────────────────────────
     args = getResolvedOptions(sys.argv, ["JOB_NAME", "TICKIT_BUCKET"])
     s3_bucket = args["TICKIT_BUCKET"]

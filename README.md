@@ -8,6 +8,8 @@ A ticket-resale analytics warehouse built with S3 Bronze → Parquet Silver → 
 
 **31 October 2026 update:** Daily SCD2 procedures and the workflow definition are deployed. Native SCD2 fixtures and a warehouse-only Step Functions rerun against the existing Silver files passed; all 47.5M facts were preserved. The observed warehouse statement took **39.064 seconds**, excluding Bronze-to-Silver ETL. See the [deployment evidence and historical-data limitation](docs/SCD2_DEPLOYMENT_2026-10-31.md).
 
+**Local-only candidate:** The queued overlap protection and manifest-to-warehouse path are implemented in `tickit_control/`, the Lambda/Glue entrypoints, and isolated workflow/SQL templates. The candidate path uses a version-pinned six-dataset manifest, durable SQS/DynamoDB admission, lease fencing, task-specific immutable ETL outputs, exact Redshift COPY manifests, and a transactional batch receipt that makes completed retries idempotent. It is not deployed. The complete local suite most recently passed **171 tests** with AWS network access blocked. These tests cover local adapters, synthetic data, a SQLite warehouse harness, workflow data paths, retries, fencing, and rollback behavior; they do not verify AWS-native IAM isolation, Glue/Spark execution, Redshift procedure compilation/COPY/locking, or live asynchronous recovery and SNS delivery. See the [controlled AWS test plan](docs/AWS_INTEGRATION_RUNBOOK.md), [manifest integration readiness](docs/MANIFEST_INTEGRATION.md), and [overlap protection gates](docs/OVERLAP_PROTECTION.md). The production deployment evidence below applies to the earlier warehouse release, not this candidate path.
+
 ## Architecture
 
 ```text
@@ -147,7 +149,8 @@ set +a
 | Runtime | Required configuration |
 |---|---|
 | Category/Venue Lambda | `TICKIT_BUCKET` environment variable |
-| S3 marker Lambda | `TICKIT_BUCKET` and `STATE_MACHINE_ARN` environment variables |
+| Queued ingress candidate (undeployed) | `TICKIT_BUCKET`, `ADMISSION_TABLE`, `BATCH_QUEUE_URL`, `TICKIT_PIPELINE_ID` |
+| Dispatcher candidate (undeployed) | `ADMISSION_TABLE`, `BATCH_QUEUE_URL`, `TICKIT_PIPELINE_ID`, `STATE_MACHINE_ARN` |
 | Users/Events Glue Python Shell | `--TICKIT_BUCKET` job argument; local runs may use `TICKIT_BUCKET` |
 | Listings/Sales Glue Spark | `--TICKIT_BUCKET` job argument |
 | Workflow | Resource settings in Git-ignored `stepfunctions/config.local.json`; runtime `load_date` input |

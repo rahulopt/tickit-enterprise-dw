@@ -24,7 +24,7 @@ The graph below is an older visualization of the broad flow. It omits the curren
 
 ![Earlier Step Functions graph showing parallel ETL followed by warehouse loads](images/stepfunctions_graph.png)
 
-A warehouse-only Step Functions execution using the existing production Silver files was verified on 31 October 2026. A successful complete six-branch ETL execution and schedule/trigger integration have not been verified. `lambda/s3_trigger.py` accepts the exact `bronze/.done` marker and uses a stable daily execution name. Its overlap check skips a marker while another execution runs; it does not queue that delivery for replay.
+A warehouse-only Step Functions execution using the existing production Silver files was verified on 31 October 2026. A successful complete six-branch ETL execution and schedule/trigger integration have not been verified. The deployed legacy trigger remains unchanged. The local `lambda/s3_trigger.py` candidate now queues version-pinned batch manifests using the new [overlap protocol](OVERLAP_PROTECTION.md); it is not deployed and is incompatible with the legacy `.done` notification contract. Native admission/workflow/ETL wiring remains pending approval.
 
 ## Warehouse model and loading
 

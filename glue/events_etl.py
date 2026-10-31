@@ -59,7 +59,15 @@ def _read_csv_from_s3(key: str, names=None, dtype=str) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(data), dtype=dtype, low_memory=False)
 
 
-def main():
+def main(batch_request=None, batch_client=None, batch_fence=None, _manifest_bypass=False):
+    if not _manifest_bypass:
+        from tickit_control.context import job_request
+        request = batch_request if batch_request is not None else job_request()
+        if request is not None:
+            from tickit_control.etl import run_pandas_branch
+            return run_pandas_branch(globals(), 'event', request,
+                                     lambda: main(_manifest_bypass=True), batch_client, batch_fence)
+
     logger.info("=" * 60)
     logger.info("Starting event ETL: Bronze CSV → Silver Parquet (denormalized)")
     start_time = datetime.now(timezone.utc)

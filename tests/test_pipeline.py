@@ -9,7 +9,6 @@ from pathlib import Path
 import boto3
 import pandas as pd
 import pytest
-from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
@@ -118,59 +117,47 @@ def test_events_lookup_duplicate_does_not_multiply_event_rows(fake_parquet):
     assert fake_parquet[0].venuename.iloc[0] == "New"
 
 
-class FakeSFN:
-    def __init__(self, *, running=False, exists=False):
-        self.running = running
-        self.exists = exists
-        self.requests = []
-
-    def list_executions(self, **kw):
-        return {"executions": [{"executionArn": "running"}]} if self.running else {"executions": []}
-
-    def start_execution(self, **kw):
-        self.requests.append(kw)
-        if self.exists:
-            raise ClientError({"Error": {"Code": "ExecutionAlreadyExists", "Message": "duplicate"}}, "StartExecution")
-        return {"executionArn": "arn:aws:states:ap-south-1:123:execution:tickit:test"}
-
-
-def done_event(key="bronze/.done", when="2026-10-29T01:00:00.000Z"):
-    return {"Records": [{"eventTime": when, "s3": {
-        "bucket": {"name": "test-tickit-bucket"},
-        "object": {"key": key, "sequencer": "AB123"},
-    }}]}
-
-
-def test_trigger_stable_execution_name_and_input():
+def test_trigger_queues_immutable_manifest_without_starting_workflow(monkeypatch):
+    from test_admission import batch
     module = load("lambda/s3_trigger.py")
-    sfn = FakeSFN()
-    module.sfn_client = sfn
-    result = module.lambda_handler(done_event(), None)
-    assert json.loads(result["body"])["results"][0]["status"] == "STARTED"
-    assert sfn.requests[0]["name"] == "tickit-nightly-2026-10-29"
-    execution_input = json.loads(sfn.requests[0]["input"])
-    assert execution_input["load_date"] == "2026-10-29"
-    assert execution_input["trigger"]["load_date"] == execution_input["load_date"]
-    module.lambda_handler(done_event(), None)
-    assert sfn.requests[0]["input"] == sfn.requests[1]["input"]
+    item = batch()
+    document = item.data
+    document['bucket'] = 'test-tickit-bucket'
+    calls = []
+    class QueueOnly:
+        def enqueue(self, manifest):
+            calls.append(manifest)
+            return 'durable-message'
+    monkeypatch.setattr(module, '_services', lambda: (QueueOnly(), lambda *args: json.dumps(document)))
+    event = {"Records": [{"s3": {"bucket": {"name": "test-tickit-bucket"},
+                               "object": {"key": "tickit-v2/batches/batch-a/input-manifest.json", "versionId": "version-1"}}}]}
+    result = module.lambda_handler(event, None)
+    assert json.loads(result['body'])['results'][0]['status'] == 'QUEUED'
+    assert calls[0]['load_date'] == '2026-10-29'
 
 
-def test_trigger_does_not_accept_other_done_suffix():
+@pytest.mark.parametrize('key', ['bronze/.done', 'bronze/tickit.done', 'bronze/other.done'])
+def test_trigger_legacy_markers_fail_loudly_without_any_aws_client(key, monkeypatch):
     module = load("lambda/s3_trigger.py")
-    module.sfn_client = FakeSFN()
-    result = module.lambda_handler(done_event("bronze/other.done"), None)
-    assert json.loads(result["body"])["results"][0]["status"] == "IGNORED"
-    assert module.sfn_client.requests == []
+    monkeypatch.setattr(module, '_services', lambda: pytest.fail('No SDK use for invalid notifications'))
+    event = {"Records": [{"s3": {"bucket": {"name": "test-tickit-bucket"},
+                                "object": {"key": key, "versionId": "version-1"}}}]}
+    with pytest.raises(ValueError, match='legacy'):
+        module.lambda_handler(event, None)
 
 
-def test_trigger_handles_replay_and_running():
+def test_trigger_transport_failure_is_retried_not_skipped(monkeypatch):
+    from test_admission import batch
     module = load("lambda/s3_trigger.py")
-    module.sfn_client = FakeSFN(exists=True)
-    result = module.lambda_handler(done_event(), None)
-    assert json.loads(result["body"])["results"][0]["status"] == "SKIPPED"
-    module.sfn_client = FakeSFN(running=True)
-    result = module.lambda_handler(done_event(), None)
-    assert json.loads(result["body"])["results"][0]["status"] == "SKIPPED"
+    document = dict(batch().data, bucket='test-tickit-bucket')
+    class Unavailable:
+        def enqueue(self, manifest):
+            raise TimeoutError('Durable queue is unavailable')
+    monkeypatch.setattr(module, '_services', lambda: (Unavailable(), lambda *args: json.dumps(document)))
+    event = {"Records": [{"s3": {"bucket": {"name": "test-tickit-bucket"},
+                                "object": {"key": "tickit-v2/batches/batch-a/input-manifest.json", "versionId": "version-1"}}}]}
+    with pytest.raises(TimeoutError):
+        module.lambda_handler(event, None)
 
 
 def test_trigger_non_notification_and_test_event():
